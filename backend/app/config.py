@@ -2,10 +2,14 @@ import os
 import sys
 import logging
 from pathlib import Path
+from dotenv import load_dotenv
 
 log = logging.getLogger('clickbook.config')
 
 BASE = Path(__file__).resolve().parents[1]
+# Uvicorn and Alembic do not load .env by default. Explicit process env wins.
+load_dotenv(BASE.parent / '.env', override=False)
+load_dotenv(BASE / '.env', override=False)
 DATA = Path(os.environ.get('CLICKBOOK_DATA', str(BASE / 'data')))
 DATA.mkdir(parents=True, exist_ok=True)
 
@@ -40,7 +44,7 @@ CLUSTER_THRESHOLD = float(os.environ.get('CLUSTER_THRESHOLD', '0.48'))
 MODEL_DIR = Path(os.environ.get('FACE_MODEL_DIR', str(BASE / 'models')))
 APP_VERSION = '1.1.0'
 
-# Storage Configuration (Cloudflare R2 or Local)
+# Storage Configuration (Cloudinary, Cloudflare R2, or Local)
 STORAGE_DRIVER = os.environ.get('STORAGE_DRIVER', '').lower()
 R2_ACCOUNT_ID = os.environ.get('R2_ACCOUNT_ID', '').strip()
 R2_ACCESS_KEY_ID = os.environ.get('R2_ACCESS_KEY_ID', '').strip()
