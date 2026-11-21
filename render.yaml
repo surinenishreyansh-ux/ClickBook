@@ -1,24 +1,32 @@
+# Render Blueprint template for NEW ClickBook deployments only.
+# The existing Render web service was created directly; this does not alter it.
+# Never upgrade to a paid instance without the owner's explicit approval.
 services:
   - type: web
     name: clickbook-live
     runtime: docker
     dockerfilePath: ./Dockerfile
-    plan: starter
+    plan: free
+    region: singapore
     healthCheckPath: /api/health
     envVars:
-      - key: PYTHONUNBUFFERED
-        value: '1'
+      - key: ENVIRONMENT
+        value: production
+      - key: CLICKBOOK_SETUP_MODE
+        value: "1"
       - key: STORAGE_DRIVER
-        value: s3
+        value: local
+      - key: WEB_CONCURRENCY
+        value: "1"
+      - key: SECRET_KEY
+        generateValue: true
       - key: DATABASE_URL
         sync: false
-      - key: S3_BUCKET
+      - key: CLOUDINARY_CLOUD_NAME
         sync: false
-      - key: S3_ENDPOINT_URL
+      - key: CLOUDINARY_API_KEY
         sync: false
-      - key: S3_REGION
+      - key: CLOUDINARY_API_SECRET
         sync: false
-      - key: AWS_ACCESS_KEY_ID
-        sync: false
-      - key: AWS_SECRET_ACCESS_KEY
-        sync: false
+      - key: CLOUDINARY_MAX_ASSET_MB
+        value: "10"
