@@ -54,8 +54,8 @@ async def lifespan(_app):
 app = FastAPI(
     title='Clickbook API',
     version=APP_VERSION,
-    docs_url='/api/docs',
-    openapi_url='/api/openapi.json',
+    docs_url=None if IS_PRODUCTION else '/api/docs',
+    openapi_url=None if IS_PRODUCTION else '/api/openapi.json',
     lifespan=lifespan
 )
 
@@ -74,7 +74,31 @@ async def setup_gate(request: Request, call_next):
                 content={'detail': 'ClickBook is being configured. Please try again later.'},
                 headers={'Cache-Control': 'no-store'}
             )
-    return await call_next(request)
+    response = await call_next(request)
+    # Security headers apply to HTML, JSON, and image responses alike.
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Cross-Origin-Opener-Policy'] = 'same-origin'
+    response.headers['Permissions-Policy'] = 'camera=(self), microphone=(), geolocation=()'
+    if request.url.scheme == 'https':
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000'
+    if IS_PRODUCTION:
+        response.headers['Content-Security-Policy'] = (
+            "default-src 'self'; "
+            "base-uri 'self'; frame-ancestors 'none'; object-src 'none'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com data:; "
+            "img-src 'self' data: blob: https://images.unsplash.com; "
+            "connect-src 'self'; form-action 'self'; "
+            "media-src 'self' blob:;"
+        )
+    # URLs containing private event codes and authenticated responses should
+    # not be stored by shared proxies.
+    if request.url.path.startswith(('/api/g/', '/api/events/', '/api/auth/')):
+        response.headers['Cache-Control'] = 'private, no-store'
+    return response
 
 app.add_middleware(
     CORSMiddleware,
