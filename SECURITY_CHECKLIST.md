@@ -23,7 +23,7 @@ Review this checklist before publishing your ClickBook installation to productio
 - [ ] **Account resilience:** Test provider outages and confirm storage
   deletion errors are reported and retried.
 
-Cloudinary remains an optional alternative and is not enabled by default.
+Cloudflare R2 remains an optional alternative and is not enabled by default.
 Cloudinary's Free plan has limited credits and does not guarantee production
 scale. See [CLOUDINARY_SETUP.md](CLOUDINARY_SETUP.md).
 
