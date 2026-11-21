@@ -229,6 +229,7 @@ def health(db: DbSession = Depends(get_db)):
         'version': APP_VERSION,
         'database_connected': db_ok,
         'database_backend': engine.dialect.name,
+        'build_commit': os.environ.get('RENDER_GIT_COMMIT', '')[:12] or None,
         'ai_models_ready': face_ai.models_available(),
         'storage_driver': store.driver,
         'gemini_ready': gemini_ai.is_gemini_available(),
