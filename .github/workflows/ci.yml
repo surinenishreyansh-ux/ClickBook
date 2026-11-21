@@ -27,6 +27,22 @@ jobs:
       - name: Run backend tests
         run: python -m pytest -q tests
 
+  raw-camera-uploader:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: uploader/requirements-raw.txt
+      - name: Install camera RAW development dependencies
+        run: python -m pip install -r uploader/requirements-raw.txt
+      - name: Compile RAW uploader
+        run: python -m compileall -q uploader
+      - name: Test RAW development, secure JPEG upload and no duplicate camera pairs
+        run: python -m unittest discover -s uploader/tests -v
+
   frontend:
     runs-on: ubuntu-latest
     defaults:

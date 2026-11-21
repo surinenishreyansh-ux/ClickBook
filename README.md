@@ -28,7 +28,7 @@
 
 - **Editorial Web UI:** High-contrast responsive design, camera capture via `getUserMedia`, multi-device upload queue.
 - **Role-Based Collaboration:** Event owners, 7-day photographer invites with optional email restrictions, photographer revocation.
-- **DSLR Auto-Uploader:** Zero-dependency Python desktop utility that monitors tethered camera folders, detects file stabilization, and uploads to ClickBook automatically.
+- **DSLR RAW-to-Live:** Photographer-side folder watcher auto-develops compatible camera RAW (CR2, CR3, NEF, ARW, DNG, etc.) into high-quality JPEG and sends it to the live QR gallery. Original RAW remains local. Regular JPEG/PNG/WebP monitoring needs no extra packages; RAW mode installs optional `rawpy` + Pillow. RAW+JPEG camera pairs upload only one image.
 - **Live Guest Gallery:** Instant QR code and secret link access with Server-Sent Events (SSE) live updates and polling fallback.
 - **Secure Uploads:** Authorized photographers upload through FastAPI from phone cameras, desktop uploads, or the DSLR folder uploader. Cloudinary saves three normalized private JPEG variants using authenticated delivery. R2 direct-to-bucket upload remains an optional alternative when configured.
 - **OpenCV Face Matching:** Local YuNet face detection and SFace 128D embeddings. Consent-gated ephemeral selfie matching and tap-to-find face selection in event photos.
@@ -112,6 +112,20 @@ python uploader/clickbook_uploader.py \
 ```
 
 The tool will securely prompt for your password, monitor the directory for stable JPEGs, and stream them to ClickBook. Credentials are never written to disk.
+
+## DSLR RAW → Live Gallery
+
+For an actual in-person event, use the photographer computer's tethered camera
+folder watcher to develop camera RAW locally and publish processed JPEGs
+automatically to Cloudinary and the guest QR gallery.
+
+**[RAW_TO_LIVE_SETUP.md](RAW_TO_LIVE_SETUP.md)** explains Windows setup,
+supported camera RAW formats, the live uploader command, quality options
+and limits. RAW files are never sent to the server. Camera JPEG+RAW
+pairs are deduplicated by filename. Direct browser RAW uploads are not
+supported in this release.
+
+---
 
 ## First in-person pilot release (payments deferred)
 
