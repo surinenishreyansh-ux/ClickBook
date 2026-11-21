@@ -1,0 +1,103 @@
+name: ClickBook real photo integration smoke test
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/live-photo-smoke.yml']
+  workflow_dispatch:
+
+jobs:
+  live-photo-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install small test dependencies
+        run: python -m pip install --quiet requests Pillow
+      - name: Verify Neon, Cloudinary and private gallery lifecycle
+        env:
+          CLICKBOOK_URL: https://clickbook-live.onrender.com
+        run: |
+          python - <<'PY'
+          import io
+          import os
+          import secrets
+          import time
+          import requests
+          from PIL import Image
+
+          base = os.environ['CLICKBOOK_URL']
+          session = requests.Session()
+          health = None
+          for attempt in range(35):
+              try:
+                  resp = session.get(base + '/api/health', timeout=25)
+                  if resp.status_code == 200:
+                      health = resp.json()
+                      if (health.get('setup_required') is False and
+                              health.get('storage_driver') == 'cloudinary' and
+                              health.get('database_backend') == 'postgresql' and
+                              health.get('database_connected') is True):
+                          break
+              except requests.RequestException:
+                  pass
+              print('Waiting for the public API to be ready...', flush=True)
+              time.sleep(8)
+          else:
+              raise RuntimeError('ClickBook setup gate or infrastructure is not ready')
+
+          print('Infrastructure ready: PostgreSQL + Cloudinary', flush=True)
+          suffix = secrets.token_hex(9)
+          email = 'qa-clickbook-' + suffix + '@example.com'
+          password = secrets.token_urlsafe(30)
+          auth = None
+          event_id = None
+          try:
+              r = session.post(base + '/api/auth/register',
+                               json={'email': email, 'password': password},
+                               timeout=40)
+              print('Registration:', r.status_code, flush=True)
+              assert r.status_code == 201, 'Registration failed'
+              auth = {'Authorization': 'Bearer ' + r.json()['token']}
+
+              r = session.post(base + '/api/events', headers=auth,
+                               json={'title':'Automated ClickBook storage validation',
+                                     'location':'QA environment', 'event_date':'2026-11-21'},
+                               timeout=40)
+              print('Create event:', r.status_code, flush=True)
+              assert r.status_code == 201, 'Event creation failed'
+              event = r.json()
+              event_id, code = event['id'], event['guest_code']
+
+              photo = Image.new('RGB', (800, 600), (44, 91, 128))
+              buf = io.BytesIO()
+              photo.save(buf, 'JPEG', quality=85)
+              r = session.post(base + '/api/events/' + event_id + '/photos',
+                               headers=auth, files={'file': ('qa-synthetic-photo.jpg', buf.getvalue(), 'image/jpeg')},
+                               timeout=100)
+              print('Cloudinary upload:', r.status_code, flush=True)
+              assert r.status_code == 201, 'Authenticated Cloudinary upload failed'
+              photo_id = r.json()['photo']['id']
+
+              r = session.get(base + '/api/g/' + code + '/photos', timeout=40)
+              print('Guest gallery:', r.status_code, flush=True)
+              assert r.status_code == 200 and any(p['id'] == photo_id for p in r.json()['photos']), 'Gallery did not show uploaded image'
+
+              r = session.get(base + '/api/g/' + code + '/photos/' + photo_id + '/image?size=thumb', timeout=100)
+              print('Private Cloudinary thumbnail delivery:', r.status_code, flush=True)
+              assert r.status_code == 200 and r.headers.get('content-type', '').startswith('image/jpeg'), 'Thumbnail cannot be retrieved'
+              assert len(r.content) > 100, 'Thumbnail response was empty'
+              print('Cloudinary upload and private guest delivery passed.', flush=True)
+
+          finally:
+              if auth and event_id:
+                  try:
+                      r = session.delete(base + '/api/events/' + event_id, headers=auth, timeout=100)
+                      print('Cloudinary test-image cleanup:', r.status_code, flush=True)
+                      assert r.status_code == 200, 'Test event/photo cleanup failed'
+                  except Exception as exc:
+                      print('Cleanup requires manual investigation:', type(exc).__name__, flush=True)
+                      raise
+          PY
