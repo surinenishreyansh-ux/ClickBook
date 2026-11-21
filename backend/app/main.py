@@ -64,11 +64,11 @@ app = FastAPI(
 # data on an ephemeral SQLite / local-storage fallback.
 @app.middleware('http')
 async def setup_gate(request: Request, call_next):
+    # Render's default probe sends HEAD /, regardless of setup mode. Always
+    # respond successfully to that probe; it serves no private user data.
+    if request.method == 'HEAD' and request.url.path == '/':
+        return Response(status_code=200, headers={'Cache-Control': 'no-store'})
     if os.environ.get('CLICKBOOK_SETUP_MODE', '0').lower() in ('1', 'true', 'yes'):
-        # Render's default startup health probe sends HEAD /.
-        # Keep it healthy while all user-facing routes remain disabled.
-        if request.method == 'HEAD' and request.url.path == '/':
-            return Response(status_code=200, headers={'Cache-Control': 'no-store'})
         if request.url.path != '/api/health':
             return JSONResponse(
                 status_code=503,
