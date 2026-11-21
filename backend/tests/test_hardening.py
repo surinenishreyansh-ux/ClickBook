@@ -11,14 +11,14 @@ from app import main
 
 def test_email_login_throttling():
     client = TestClient(main.app)
-    payload = {'email': 'nonexistent-credential-probe@example.invalid', 'password': 'bad-password-123'}
+    payload = {'email': 'nonexistent-credential-probe@example.com', 'password': 'bad-password-123'}
     for attempt in range(12):
         assert client.post('/api/auth/login', json=payload).status_code == 401
     blocked = client.post('/api/auth/login', json=payload)
     assert blocked.status_code == 429
     assert blocked.headers['retry-after'] == '600'
     # A different email must not be permanently locked out by this bucket.
-    other = dict(payload, email='other-credential-probe@example.invalid')
+    other = dict(payload, email='other-credential-probe@example.com')
     assert client.post('/api/auth/login', json=other).status_code == 401
 
 
