@@ -19,6 +19,7 @@ All runtime configuration for ClickBook is governed through environment variable
 | `CLOUDINARY_CLOUD_NAME` | When `cloudinary` | None | Cloudinary cloud name; backend only. |
 | `CLOUDINARY_API_KEY` | When `cloudinary` | None | Cloudinary API key; backend only. |
 | `CLOUDINARY_API_SECRET` | When `cloudinary` | None | Sensitive Cloudinary API secret. Never commit or expose to frontend. |
+| `CLOUDINARY_MAX_ASSET_MB` | No | `10` | Maximum uploaded derivative size in MiB for the Cloudinary Free plan. |
 | `R2_ACCOUNT_ID` | When `r2` | None | Your 32-character Cloudflare Account ID from the Cloudflare dashboard. |
 | `R2_ACCESS_KEY_ID` | When `r2` | None | Cloudflare R2 S3 API Access Key ID. |
 | `R2_SECRET_ACCESS_KEY` | When `r2` | None | Cloudflare R2 S3 API Secret Access Key. |
