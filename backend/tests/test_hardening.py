@@ -35,6 +35,7 @@ def test_limiter_is_bounded_and_denies_overuse():
 def test_security_headers_are_sent_on_api_and_error_responses(monkeypatch):
     client = TestClient(main.app)
     monkeypatch.setattr(main, 'IS_PRODUCTION', True)
+    assert client.head('/').status_code == 200
     for path in ('/api/health', '/api/g/invalid-guest-link'):
         response = client.get(path)
         assert response.headers['x-content-type-options'] == 'nosniff'
