@@ -1,0 +1,48 @@
+name: Verify ClickBook Render readiness
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/render-readiness.yml']
+  workflow_dispatch:
+
+jobs:
+  readiness:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check live infrastructure (no credentials printed)
+        env:
+          CLICKBOOK_HEALTH_URL: https://clickbook-live.onrender.com/api/health
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.request
+
+          url = os.environ["CLICKBOOK_HEALTH_URL"]
+          for attempt in range(45):
+              try:
+                  req = urllib.request.Request(url, headers={"User-Agent": "ClickBook-Readiness/1"})
+                  with urllib.request.urlopen(req, timeout=15) as response:
+                      health = json.load(response)
+                  safe = {key: health.get(key) for key in (
+                      "status", "database_connected", "database_backend",
+                      "storage_driver", "setup_required", "ai_models_ready"
+                  )}
+                  print("Readiness:", json.dumps(safe), flush=True)
+                  if health.get("database_backend") is None:
+                      print("Waiting for latest backend build...", flush=True)
+                  else:
+                      assert health.get("setup_required") is True, "Staging safety gate was unexpectedly disabled"
+                      assert health.get("database_backend") == "postgresql", "Neon/PostgreSQL has not been configured"
+                      assert health.get("database_connected") is True, "Neon database query is failing"
+                      assert health.get("storage_driver") == "cloudinary", "Cloudinary storage driver is not configured"
+                      print("Neon and Cloudinary setup configuration ready; public gate remains closed.", flush=True)
+                      break
+              except Exception as exc:
+                  print("Health check pending:", type(exc).__name__, flush=True)
+              time.sleep(8)
+          else:
+              raise SystemExit("Live readiness check did not pass")
+          PY
