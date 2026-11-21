@@ -412,7 +412,13 @@ def invite_preview(token: str, db: DbSession = Depends(get_db)):
 
 @app.post('/api/invites/{token}/accept')
 def accept_invite(token: str, user: User = Depends(current_user), db: DbSession = Depends(get_db)):
-    inv = db.scalar(select(Invite).where(Invite.token_hash == hashlib.sha256(token.encode()).hexdigest()))
+    # Lock the one-time invitation row on PostgreSQL so two concurrent users
+    # cannot redeem it before either request commits.
+    inv = db.scalar(
+        select(Invite)
+        .where(Invite.token_hash == hashlib.sha256(token.encode()).hexdigest())
+        .with_for_update()
+    )
     if not inv or inv.used_by or inv.expires_at.replace(tzinfo=inv.expires_at.tzinfo or now().tzinfo) < now():
         raise HTTPException(404, 'Invitation expired or already used')
     if inv.email and user.email != inv.email:
@@ -996,37 +1002,67 @@ def team_semantic_search(
 
 # --- Real-Time Gallery SSE Stream ---
 
+# Reuse a 3-second event state snapshot across all guests on this worker.
+# Without this, each guest connection made 2 database queries every 2s,
+# overloading a small Neon instance when an in-person event gets busy.
+_sse_cache_lock = threading.Lock()
+_sse_state_cache = {}
+_SSE_TTL_SECONDS = 3.0
+
+def guest_event_state(code: str) -> dict:
+    now_tick = time.monotonic()
+    with _sse_cache_lock:
+        cached = _sse_state_cache.get(code)
+        if cached and now_tick - cached[0] < _SSE_TTL_SECONDS:
+            return cached[1]
+        with SessionLocal() as db:
+            e = get_guest_event(db, code)
+            count = db.scalar(select(func.count(Photo.id)).where(Photo.event_id == e.id)) or 0
+            indexed = db.scalar(
+                select(func.count(Photo.id)).where(Photo.event_id == e.id, Photo.face_status == 'done')
+            ) or 0
+            status = {
+                'count': count,
+                'processed': indexed,
+                'face_enabled': e.face_enabled,
+                'downloads_enabled': e.downloads_enabled
+            }
+        _sse_state_cache[code] = (time.monotonic(), status)
+        # Bound memory usage if anonymous callers generate many stale event links.
+        if len(_sse_state_cache) > 250:
+            cutoff = time.monotonic() - 180
+            for candidate, (created, _) in list(_sse_state_cache.items()):
+                if created < cutoff:
+                    _sse_state_cache.pop(candidate, None)
+        return status
+
 @app.get('/api/g/{code}/stream')
 async def updates(code: str, request: Request):
-    """Server-Sent Events stream for live gallery refreshes without polling."""
+    """Live guest notifications using one shared database snapshot per event."""
     with SessionLocal() as db:
         get_guest_event(db, code)
 
     async def generate():
         import asyncio
         last = None
-        for _ in range(13):
+        for _ in range(30):
             if await request.is_disconnected():
                 break
-            with SessionLocal() as db:
-                e = get_guest_event(db, code)
-                value = db.scalar(select(func.count(Photo.id)).where(Photo.event_id == e.id)) or 0
-                face_progress = db.scalar(
-                    select(func.count(Photo.id)).where(Photo.event_id == e.id, Photo.face_status == 'done')
-                ) or 0
-                marker = f'{value}:{face_progress}:{e.face_enabled}:{e.downloads_enabled}'
+            # Never block the event loop on synchronous Neon queries.
+            status = await run_in_threadpool(guest_event_state, code)
+            marker = json.dumps(status, sort_keys=True)
             if marker != last:
-                yield f'event: update\ndata: {json.dumps({"count": value, "processed": face_progress})}\n\n'
+                yield f'event: update\\ndata: {json.dumps({"count": status["count"], "processed": status["processed"]})}\\n\\n'
                 last = marker
             else:
-                yield ': ping\n\n'
-            await asyncio.sleep(2)
+                yield ': ping\\n\\n'
+            await asyncio.sleep(3)
 
     return StreamingResponse(
         generate(),
         media_type='text/event-stream',
         headers={
-            'Cache-Control': 'no-cache',
+            'Cache-Control': 'no-cache, no-store',
             'X-Accel-Buffering': 'no',
             'X-Robots-Tag': 'noindex'
         }
