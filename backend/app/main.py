@@ -14,6 +14,7 @@ from fastapi import FastAPI, Depends, UploadFile, File, BackgroundTasks, HTTPExc
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse, RedirectResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select, func, delete, update, or_
 from sqlalchemy.exc import IntegrityError
@@ -21,7 +22,8 @@ from sqlalchemy.orm import Session as DbSession
 from PIL import Image, ImageOps, UnidentifiedImageError
 from .config import (
     ALLOWED_ORIGINS, MAX_IMAGE_MB, APP_VERSION, STORAGE_DRIVER,
-    GEMINI_API_KEY, IS_PRODUCTION, CLOUDINARY_MAX_ASSET_MB
+    GEMINI_API_KEY, IS_PRODUCTION, CLOUDINARY_MAX_ASSET_MB,
+    MAX_EVENT_PHOTOS, MAX_OWNER_EVENTS
 )
 from .db import (
     init_db, get_db, SessionLocal, engine, User, Session as LoginSession,
@@ -35,10 +37,11 @@ from .storage import store
 from . import face_ai
 from . import gemini_ai
 from . import queue
+from .limits import check_rate
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger('clickbook')
-Image.MAX_IMAGE_PIXELS = 80_000_000
+Image.MAX_IMAGE_PIXELS = 36_000_000
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -52,8 +55,8 @@ async def lifespan(_app):
 app = FastAPI(
     title='Clickbook API',
     version=APP_VERSION,
-    docs_url='/api/docs',
-    openapi_url='/api/openapi.json',
+    docs_url=None if IS_PRODUCTION else '/api/docs',
+    openapi_url=None if IS_PRODUCTION else '/api/openapi.json',
     lifespan=lifespan
 )
 
@@ -72,7 +75,31 @@ async def setup_gate(request: Request, call_next):
                 content={'detail': 'ClickBook is being configured. Please try again later.'},
                 headers={'Cache-Control': 'no-store'}
             )
-    return await call_next(request)
+    response = await call_next(request)
+    # Security headers apply to HTML, JSON, and image responses alike.
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Cross-Origin-Opener-Policy'] = 'same-origin'
+    response.headers['Permissions-Policy'] = 'camera=(self), microphone=(), geolocation=()'
+    if request.url.scheme == 'https':
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000'
+    if IS_PRODUCTION:
+        response.headers['Content-Security-Policy'] = (
+            "default-src 'self'; "
+            "base-uri 'self'; frame-ancestors 'none'; object-src 'none'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com data:; "
+            "img-src 'self' data: blob: https://images.unsplash.com; "
+            "connect-src 'self'; form-action 'self'; "
+            "media-src 'self' blob:;"
+        )
+    # URLs containing private event codes and authenticated responses should
+    # not be stored by shared proxies.
+    if request.url.path.startswith(('/api/g/', '/api/events/', '/api/auth/')):
+        response.headers['Cache-Control'] = 'private, no-store'
+    return response
 
 app.add_middleware(
     CORSMiddleware,
@@ -128,26 +155,15 @@ class ConfirmUploadRequest(BaseModel):
     width: int = Field(gt=0)
     height: int = Field(gt=0)
 
-# --- Rate Limiting ---
-
-_limit_lock = threading.Lock()
-_face_requests = defaultdict(deque)
+# --- Per-event face search abuse protection ---
 
 def rate_limit(request: Request, code: str):
+    # A guest QR is a bearer link. Limit costly searches at the EVENT level,
+    # independent of any user-controlled forwarding headers. The generous
+    # IP allowance permits many guests on the same venue Wi-Fi connection.
+    check_rate('guest-face-event', code, limit=180, period=60)
     ip = request.client.host if request.client else 'unknown'
-    key = (code, ip)
-    with _limit_lock:
-        q = _face_requests[key]
-        t = time.monotonic()
-        while q and q[0] < t - 60:
-            q.popleft()
-        if len(q) >= 20:
-            raise HTTPException(429, 'Too many requests. Please wait a minute before retrying.')
-        q.append(t)
-        if len(_face_requests) > 5000:
-            for k in list(_face_requests.keys())[:500]:
-                if not _face_requests[k] or _face_requests[k][-1] < t - 60:
-                    _face_requests.pop(k, None)
+    check_rate('guest-face-network', ip, limit=120, period=60)
 
 # --- Helpers ---
 
@@ -213,6 +229,7 @@ def health(db: DbSession = Depends(get_db)):
         'version': APP_VERSION,
         'database_connected': db_ok,
         'database_backend': engine.dialect.name,
+        'build_commit': os.environ.get('RENDER_GIT_COMMIT', '')[:12] or None,
         'ai_models_ready': face_ai.models_available(),
         'storage_driver': store.driver,
         'gemini_ready': gemini_ai.is_gemini_available(),
@@ -222,8 +239,14 @@ def health(db: DbSession = Depends(get_db)):
 # --- Auth Routes ---
 
 @app.post('/api/auth/register', status_code=201)
-def register(body: Credentials, db: DbSession = Depends(get_db)):
+def register(body: Credentials, request: Request, db: DbSession = Depends(get_db)):
     email = str(body.email).strip().lower()
+    # After all photographers register, the owner can close new signups
+    # during the event without affecting existing accounts or guest QR links.
+    if os.environ.get('ALLOW_PUBLIC_REGISTRATION', '1').strip().lower() in ('0', 'false', 'no'):
+        raise HTTPException(403, 'New registrations are temporarily closed')
+    # Restrict automated account creation; no IP address needs to be logged.
+    check_rate('auth-register-ip', request.client.host if request.client else 'unknown', limit=30, period=3600)
     if db.scalar(select(User).where(User.email == email)):
         raise HTTPException(409, 'An account with this email already exists')
     salt, pw_hash = make_password(body.password)
@@ -238,7 +261,10 @@ def register(body: Credentials, db: DbSession = Depends(get_db)):
 
 @app.post('/api/auth/login')
 def login(body: Credentials, db: DbSession = Depends(get_db)):
-    u = db.scalar(select(User).where(User.email == str(body.email).lower()))
+    email = str(body.email).strip().lower()
+    # Per-address throttling is independent of spoofable proxy headers.
+    check_rate('auth-login-email', email, limit=12, period=600)
+    u = db.scalar(select(User).where(User.email == email))
     if not u or not check_password(body.password, u.password_salt, u.password_hash):
         raise HTTPException(401, 'Incorrect email or password')
     return {'token': new_session(db, u), 'email': u.email, 'id': u.id}
@@ -266,6 +292,9 @@ def events(user: User = Depends(current_user), db: DbSession = Depends(get_db)):
 
 @app.post('/api/events', status_code=201)
 def create_event(body: EventCreate, user: User = Depends(current_user), db: DbSession = Depends(get_db)):
+    check_rate('create-event', user.id, limit=30, period=3600)
+    if (db.scalar(select(func.count(Event.id)).where(Event.owner_id == user.id)) or 0) >= MAX_OWNER_EVENTS:
+        raise HTTPException(409, 'Maximum events reached for this account')
     e = Event(
         id=uid(),
         owner_id=user.id,
@@ -368,6 +397,7 @@ def remove_photographer(eid: str, member_id: str, user: User = Depends(current_u
 def invite(eid: str, body: InviteCreate, user: User = Depends(current_user), db: DbSession = Depends(get_db)):
     e = get_event(db, eid)
     must_owner(db, e, user)
+    check_rate('create-invite', user.id, limit=60, period=3600)
     raw = secrets.token_urlsafe(32)
     inv = Invite(
         id=uid(),
@@ -390,7 +420,13 @@ def invite_preview(token: str, db: DbSession = Depends(get_db)):
 
 @app.post('/api/invites/{token}/accept')
 def accept_invite(token: str, user: User = Depends(current_user), db: DbSession = Depends(get_db)):
-    inv = db.scalar(select(Invite).where(Invite.token_hash == hashlib.sha256(token.encode()).hexdigest()))
+    # Lock the one-time invitation row on PostgreSQL so two concurrent users
+    # cannot redeem it before either request commits.
+    inv = db.scalar(
+        select(Invite)
+        .where(Invite.token_hash == hashlib.sha256(token.encode()).hexdigest())
+        .with_for_update()
+    )
     if not inv or inv.used_by or inv.expires_at.replace(tzinfo=inv.expires_at.tzinfo or now().tzinfo) < now():
         raise HTTPException(404, 'Invitation expired or already used')
     if inv.email and user.email != inv.email:
@@ -412,7 +448,7 @@ def encode_versions(raw: bytes):
         source.verify()
         img = Image.open(io.BytesIO(raw))
         img = ImageOps.exif_transpose(img)
-        if img.width * img.height > 80_000_000:
+        if img.width * img.height > 36_000_000:
             raise HTTPException(413, 'Image resolution too high')
         img = img.convert('RGB')
     except HTTPException:
@@ -465,7 +501,9 @@ async def upload_photo(
     must_member(db, e, user)
     if e.status != 'live':
         raise HTTPException(403, 'This event is closed to new uploads')
-
+    check_rate('upload-member', user.id, limit=180, period=60)
+    # Reject oversized uploads before decoding JPEGs. We still check actual
+    # bytes because Content-Length is not a trustworthy size guarantee.
     raw = await file.read(MAX_IMAGE_MB * 1024 * 1024 + 1)
     if len(raw) > MAX_IMAGE_MB * 1024 * 1024:
         raise HTTPException(413, f'Maximum upload size is {MAX_IMAGE_MB} MB')
@@ -476,15 +514,18 @@ async def upload_photo(
     existing = db.scalar(select(Photo).where(Photo.event_id == eid, Photo.sha256 == checksum))
     if existing:
         return {'photo': photo_out(existing), 'duplicate': True}
+    if (db.scalar(select(func.count(Photo.id)).where(Photo.event_id == eid)) or 0) >= MAX_EVENT_PHOTOS:
+        raise HTTPException(409, 'Event photo capacity reached. Contact the organizer.')
 
-    full, view, thumb, w, h = encode_versions(raw)
+    # CPU-heavy image decoding/encoding must not block the live-gallery event loop.
+    full, view, thumb, w, h = await run_in_threadpool(encode_versions, raw)
     pid = uid()
     prefix = f'{eid}/{pid}'
     keys = (f'{prefix}/full.jpg', f'{prefix}/view.jpg', f'{prefix}/thumb.jpg')
 
     try:
         for key, blob in zip(keys, (full, view, thumb)):
-            store.put(key, blob)
+            await run_in_threadpool(store.put, key, blob)
 
         p = Photo(
             id=pid,
@@ -547,6 +588,8 @@ def request_presigned_upload(
     existing = db.scalar(select(Photo).where(Photo.event_id == eid, Photo.sha256 == body.sha256))
     if existing:
         return {'duplicate': True, 'photo': photo_out(existing)}
+    if (db.scalar(select(func.count(Photo.id)).where(Photo.event_id == eid)) or 0) >= MAX_EVENT_PHOTOS:
+        raise HTTPException(409, 'Event photo capacity reached')
 
     pid = uid()
     prefix = f'{eid}/{pid}'
@@ -597,6 +640,8 @@ def confirm_presigned_upload(
 
     if not head_full['exists'] or not head_view['exists'] or not head_thumb['exists']:
         raise HTTPException(400, 'One or more photo derivatives were not found in storage. Upload failed.')
+    if (db.scalar(select(func.count(Photo.id)).where(Photo.event_id == eid)) or 0) >= MAX_EVENT_PHOTOS:
+        raise HTTPException(409, 'Event photo capacity reached')
 
     try:
         p = Photo(
@@ -763,14 +808,14 @@ def image_response(key: str, download: bool = False, filename: str = 'photo.jpg'
                 url=url,
                 status_code=302,
                 headers={
-                    'Cache-Control': 'private, max-age=120',
+                    'Cache-Control': 'private, no-store',
                     'X-Robots-Tag': 'noindex, nofollow'
                 }
             )
     # Local fallback
     data = store.get(key)
     headers = {
-        'Cache-Control': 'private, max-age=120',
+        'Cache-Control': 'private, no-store',
         'X-Robots-Tag': 'noindex, nofollow',
         'Content-Security-Policy': "default-src 'none'"
     }
@@ -888,11 +933,11 @@ async def find_by_selfie(
     raw = await file.read(8 * 1024 * 1024 + 1)
     if len(raw) > 8 * 1024 * 1024:
         raise HTTPException(413, 'Selfie must be smaller than 8 MB')
-    _, view, _, _, _ = encode_versions(raw)
+    _, view, _, _, _ = await run_in_threadpool(encode_versions, raw)
 
     # CRITICAL: Guest selfies are strictly kept in-memory and NEVER saved to disk, DB, logs, or Gemini.
     try:
-        detected = face_ai.extract_faces(view)
+        detected = await run_in_threadpool(face_ai.extract_faces, view)
     except RuntimeError:
         raise HTTPException(503, 'Face AI models are not installed on this server')
 
@@ -971,37 +1016,67 @@ def team_semantic_search(
 
 # --- Real-Time Gallery SSE Stream ---
 
+# Reuse a 3-second event state snapshot across all guests on this worker.
+# Without this, each guest connection made 2 database queries every 2s,
+# overloading a small Neon instance when an in-person event gets busy.
+_sse_cache_lock = threading.Lock()
+_sse_state_cache = {}
+_SSE_TTL_SECONDS = 3.0
+
+def guest_event_state(code: str) -> dict:
+    now_tick = time.monotonic()
+    with _sse_cache_lock:
+        cached = _sse_state_cache.get(code)
+        if cached and now_tick - cached[0] < _SSE_TTL_SECONDS:
+            return cached[1]
+        with SessionLocal() as db:
+            e = get_guest_event(db, code)
+            count = db.scalar(select(func.count(Photo.id)).where(Photo.event_id == e.id)) or 0
+            indexed = db.scalar(
+                select(func.count(Photo.id)).where(Photo.event_id == e.id, Photo.face_status == 'done')
+            ) or 0
+            status = {
+                'count': count,
+                'processed': indexed,
+                'face_enabled': e.face_enabled,
+                'downloads_enabled': e.downloads_enabled
+            }
+        _sse_state_cache[code] = (time.monotonic(), status)
+        # Bound memory usage if anonymous callers generate many stale event links.
+        if len(_sse_state_cache) > 250:
+            cutoff = time.monotonic() - 180
+            for candidate, (created, _) in list(_sse_state_cache.items()):
+                if created < cutoff:
+                    _sse_state_cache.pop(candidate, None)
+        return status
+
 @app.get('/api/g/{code}/stream')
 async def updates(code: str, request: Request):
-    """Server-Sent Events stream for live gallery refreshes without polling."""
+    """Live guest notifications using one shared database snapshot per event."""
     with SessionLocal() as db:
         get_guest_event(db, code)
 
     async def generate():
         import asyncio
         last = None
-        for _ in range(13):
+        for _ in range(30):
             if await request.is_disconnected():
                 break
-            with SessionLocal() as db:
-                e = get_guest_event(db, code)
-                value = db.scalar(select(func.count(Photo.id)).where(Photo.event_id == e.id)) or 0
-                face_progress = db.scalar(
-                    select(func.count(Photo.id)).where(Photo.event_id == e.id, Photo.face_status == 'done')
-                ) or 0
-                marker = f'{value}:{face_progress}:{e.face_enabled}:{e.downloads_enabled}'
+            # Never block the event loop on synchronous Neon queries.
+            status = await run_in_threadpool(guest_event_state, code)
+            marker = json.dumps(status, sort_keys=True)
             if marker != last:
-                yield f'event: update\ndata: {json.dumps({"count": value, "processed": face_progress})}\n\n'
+                yield f'event: update\\ndata: {json.dumps({"count": status["count"], "processed": status["processed"]})}\\n\\n'
                 last = marker
             else:
-                yield ': ping\n\n'
-            await asyncio.sleep(2)
+                yield ': ping\\n\\n'
+            await asyncio.sleep(3)
 
     return StreamingResponse(
         generate(),
         media_type='text/event-stream',
         headers={
-            'Cache-Control': 'no-cache',
+            'Cache-Control': 'no-cache, no-store',
             'X-Accel-Buffering': 'no',
             'X-Robots-Tag': 'noindex'
         }
@@ -1022,8 +1097,13 @@ if SITE_DIR.is_dir() and (SITE_DIR / 'index.html').is_file():
             raise HTTPException(404, 'API endpoint not found')
         # Do not serve arbitrary filesystem paths; only SPA fallback and static assets
         if path and '.' in Path(path).name:
-            asset_path = SITE_DIR / path
-            if asset_path.is_file():
+            # Only known root-level public files; the /assets mount handles
+            # compiled assets. Never let a URL escape the frontend build dir.
+            allowed_public = {'favicon.ico', 'favicon.svg', 'robots.txt', 'manifest.webmanifest'}
+            if path not in allowed_public:
+                raise HTTPException(404, 'Static asset not found')
+            asset_path = (SITE_DIR / path).resolve()
+            if asset_path.is_relative_to(SITE_DIR.resolve()) and asset_path.is_file():
                 return FileResponse(asset_path)
             raise HTTPException(404, 'Static asset not found')
         return FileResponse(

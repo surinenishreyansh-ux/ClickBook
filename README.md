@@ -112,3 +112,11 @@ python uploader/clickbook_uploader.py \
 ```
 
 The tool will securely prompt for your password, monitor the directory for stable JPEGs, and stream them to ClickBook. Credentials are never written to disk.
+
+## First in-person pilot release (payments deferred)
+
+ClickBook currently has **no payment or checkout flow**. The first-event
+pilot is organizer + approved photographers + QR-linked guest gallery.
+Read **[FIRST_EVENT_RUNBOOK.md](FIRST_EVENT_RUNBOOK.md)** before using real
+people's event photographs. Production-readiness and biometric consent are
+still subject to real-device, load, outage and independent security tests.

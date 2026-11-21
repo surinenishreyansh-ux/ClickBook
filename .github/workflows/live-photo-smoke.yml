@@ -3,7 +3,10 @@ name: ClickBook real photo integration smoke test
 on:
   push:
     branches: [main]
-    paths: ['.github/workflows/live-photo-smoke.yml']
+    paths:
+      - '.github/workflows/live-photo-smoke.yml'
+      - 'backend/**'
+      - 'Dockerfile'
   workflow_dispatch:
 
 jobs:
@@ -29,6 +32,7 @@ jobs:
           from PIL import Image
 
           base = os.environ['CLICKBOOK_URL']
+          expected_commit = os.environ.get('GITHUB_SHA', '')[:12]
           session = requests.Session()
           health = None
           for attempt in range(35):
@@ -37,6 +41,7 @@ jobs:
                   if resp.status_code == 200:
                       health = resp.json()
                       if (health.get('setup_required') is False and
+                              health.get('build_commit') == expected_commit and
                               health.get('storage_driver') == 'cloudinary' and
                               health.get('database_backend') == 'postgresql' and
                               health.get('database_connected') is True):
