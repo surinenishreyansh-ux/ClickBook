@@ -39,6 +39,11 @@ release checklist for a first limited pilot.
   Photos must have an independent backup (original camera cards).
 - [ ] Test QR reset and revocation; it invalidates the URL but **cannot
   retract photos already downloaded or screenshotted**.
+- [ ] Check the current pilot limits: 2,000 photos per event, 10 events
+  per organizer. Increase only after capacity and quota validation.
+- [ ] After organizer and photographer accounts are set up, optionally set
+  `ALLOW_PUBLIC_REGISTRATION=0` in Render to close new signups during
+  the event. Guests don't need an account to scan the QR code.
 - [ ] Understand access model: the guest QR is a **bearer link**. Anyone
   with the link may view all gallery photos. Do not share private photos
   until attendees consent and this exposure is acceptable.
