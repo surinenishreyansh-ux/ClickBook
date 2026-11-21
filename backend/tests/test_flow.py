@@ -343,3 +343,16 @@ def test_alembic_upgrade():
     alembic_cfg = Config(str(Path(__file__).resolve().parents[1] / 'alembic.ini'))
     # Ensure alembic inspects head cleanly without exception
     command.heads(alembic_cfg)
+
+
+def test_public_maintenance_gate(monkeypatch):
+    """Unconfigured cloud deployments must not accept customer content."""
+    monkeypatch.setenv('CLICKBOOK_SETUP_MODE', '1')
+    health = client.get('/api/health')
+    assert health.status_code == 200
+    assert health.json()['setup_required'] is True
+    assert client.get('/').status_code == 503
+    assert client.get('/api/events').status_code == 503
+    assert client.post('/api/auth/register', json={'email': 'setup@example.com', 'password': 'really-long-password'}).status_code == 503
+    monkeypatch.delenv('CLICKBOOK_SETUP_MODE')
+    assert client.get('/api/health').json()['setup_required'] is False
