@@ -351,6 +351,7 @@ def test_public_maintenance_gate(monkeypatch):
     health = client.get('/api/health')
     assert health.status_code == 200
     assert health.json()['setup_required'] is True
+    assert health.json()['database_backend'] == 'sqlite'
     assert client.get('/').status_code == 503
     assert client.head('/').status_code == 200
     assert client.get('/api/events').status_code == 503
