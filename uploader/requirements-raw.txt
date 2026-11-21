@@ -1,0 +1,4 @@
+# Install only on the photographer's laptop/desktop.
+# Keep camera RAW files on this machine; Render never decodes them.
+rawpy>=0.28,<0.29
+Pillow>=13.0,<14
