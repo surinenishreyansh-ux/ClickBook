@@ -22,7 +22,8 @@ from sqlalchemy.orm import Session as DbSession
 from PIL import Image, ImageOps, UnidentifiedImageError
 from .config import (
     ALLOWED_ORIGINS, MAX_IMAGE_MB, APP_VERSION, STORAGE_DRIVER,
-    GEMINI_API_KEY, IS_PRODUCTION, CLOUDINARY_MAX_ASSET_MB
+    GEMINI_API_KEY, IS_PRODUCTION, CLOUDINARY_MAX_ASSET_MB,
+    MAX_EVENT_PHOTOS, MAX_OWNER_EVENTS
 )
 from .db import (
     init_db, get_db, SessionLocal, engine, User, Session as LoginSession,
@@ -239,6 +240,10 @@ def health(db: DbSession = Depends(get_db)):
 @app.post('/api/auth/register', status_code=201)
 def register(body: Credentials, request: Request, db: DbSession = Depends(get_db)):
     email = str(body.email).strip().lower()
+    # After all photographers register, the owner can close new signups
+    # during the event without affecting existing accounts or guest QR links.
+    if os.environ.get('ALLOW_PUBLIC_REGISTRATION', '1').strip().lower() in ('0', 'false', 'no'):
+        raise HTTPException(403, 'New registrations are temporarily closed')
     # Restrict automated account creation; no IP address needs to be logged.
     check_rate('auth-register-ip', request.client.host if request.client else 'unknown', limit=30, period=3600)
     if db.scalar(select(User).where(User.email == email)):
@@ -287,6 +292,8 @@ def events(user: User = Depends(current_user), db: DbSession = Depends(get_db)):
 @app.post('/api/events', status_code=201)
 def create_event(body: EventCreate, user: User = Depends(current_user), db: DbSession = Depends(get_db)):
     check_rate('create-event', user.id, limit=30, period=3600)
+    if (db.scalar(select(func.count(Event.id)).where(Event.owner_id == user.id)) or 0) >= MAX_OWNER_EVENTS:
+        raise HTTPException(409, 'Maximum events reached for this account')
     e = Event(
         id=uid(),
         owner_id=user.id,
@@ -506,6 +513,8 @@ async def upload_photo(
     existing = db.scalar(select(Photo).where(Photo.event_id == eid, Photo.sha256 == checksum))
     if existing:
         return {'photo': photo_out(existing), 'duplicate': True}
+    if (db.scalar(select(func.count(Photo.id)).where(Photo.event_id == eid)) or 0) >= MAX_EVENT_PHOTOS:
+        raise HTTPException(409, 'Event photo capacity reached. Contact the organizer.')
 
     # CPU-heavy image decoding/encoding must not block the live-gallery event loop.
     full, view, thumb, w, h = await run_in_threadpool(encode_versions, raw)
@@ -578,6 +587,8 @@ def request_presigned_upload(
     existing = db.scalar(select(Photo).where(Photo.event_id == eid, Photo.sha256 == body.sha256))
     if existing:
         return {'duplicate': True, 'photo': photo_out(existing)}
+    if (db.scalar(select(func.count(Photo.id)).where(Photo.event_id == eid)) or 0) >= MAX_EVENT_PHOTOS:
+        raise HTTPException(409, 'Event photo capacity reached')
 
     pid = uid()
     prefix = f'{eid}/{pid}'
@@ -628,6 +639,8 @@ def confirm_presigned_upload(
 
     if not head_full['exists'] or not head_view['exists'] or not head_thumb['exists']:
         raise HTTPException(400, 'One or more photo derivatives were not found in storage. Upload failed.')
+    if (db.scalar(select(func.count(Photo.id)).where(Photo.event_id == eid)) or 0) >= MAX_EVENT_PHOTOS:
+        raise HTTPException(409, 'Event photo capacity reached')
 
     try:
         p = Photo(
