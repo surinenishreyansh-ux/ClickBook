@@ -40,6 +40,9 @@ def test_authenticated_cloudinary_storage(monkeypatch):
     assert calls[0]["overwrite"] is False
     assert storage.get(key) == b"sample-jpeg"
     assert storage.head(key)["exists"] is True
+    with pytest.raises(HTTPException) as oversize:
+        storage.put(key, b"x" * (10 * 1024 * 1024 + 1))
+    assert oversize.value.status_code == 413
     storage.delete_many([key])
     with pytest.raises(ValueError):
         storage.public_id("../../arbitrary.jpg")
