@@ -352,6 +352,7 @@ def test_public_maintenance_gate(monkeypatch):
     assert health.status_code == 200
     assert health.json()['setup_required'] is True
     assert client.get('/').status_code == 503
+    assert client.head('/').status_code == 200
     assert client.get('/api/events').status_code == 503
     assert client.post('/api/auth/register', json={'email': 'setup@example.com', 'password': 'really-long-password'}).status_code == 503
     monkeypatch.delenv('CLICKBOOK_SETUP_MODE')
