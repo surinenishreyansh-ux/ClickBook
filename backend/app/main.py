@@ -154,26 +154,15 @@ class ConfirmUploadRequest(BaseModel):
     width: int = Field(gt=0)
     height: int = Field(gt=0)
 
-# --- Rate Limiting ---
-
-_limit_lock = threading.Lock()
-_face_requests = defaultdict(deque)
+# --- Per-event face search abuse protection ---
 
 def rate_limit(request: Request, code: str):
+    # A guest QR is a bearer link. Limit costly searches at the EVENT level,
+    # independent of any user-controlled forwarding headers. The generous
+    # IP allowance permits many guests on the same venue Wi-Fi connection.
+    check_rate('guest-face-event', code, limit=180, period=60)
     ip = request.client.host if request.client else 'unknown'
-    key = (code, ip)
-    with _limit_lock:
-        q = _face_requests[key]
-        t = time.monotonic()
-        while q and q[0] < t - 60:
-            q.popleft()
-        if len(q) >= 20:
-            raise HTTPException(429, 'Too many requests. Please wait a minute before retrying.')
-        q.append(t)
-        if len(_face_requests) > 5000:
-            for k in list(_face_requests.keys())[:500]:
-                if not _face_requests[k] or _face_requests[k][-1] < t - 60:
-                    _face_requests.pop(k, None)
+    check_rate('guest-face-network', ip, limit=120, period=60)
 
 # --- Helpers ---
 
