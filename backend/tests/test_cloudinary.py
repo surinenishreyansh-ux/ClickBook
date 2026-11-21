@@ -4,10 +4,8 @@ import sys
 from types import ModuleType
 import pytest
 from fastapi import HTTPException
-from app import cloudinary_storage as mod
-
-
 def test_authenticated_cloudinary_storage(monkeypatch):
+    from app import cloudinary_storage as mod
     sdk = ModuleType("cloudinary")
     sdk.__path__ = []
     api = ModuleType("cloudinary.api")
