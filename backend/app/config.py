@@ -97,8 +97,10 @@ def validate_production_config():
     """Validate critical environment variables in production without leaking secrets."""
     missing = []
     if IS_PRODUCTION:
-        if DATABASE_URL.startswith('sqlite'):
-            log.warning('PRODUCTION WARNING: DATABASE_URL is pointing to SQLite. Neon PostgreSQL is recommended.')
+        if not DATABASE_URL.startswith('postgresql+'):
+            missing.append('DATABASE_URL (production requires PostgreSQL)')
+        if STORAGE_DRIVER == 'local':
+            missing.append('STORAGE_DRIVER (production requires cloudinary or r2)')
         if SECRET_KEY == 'clickbook-insecure-dev-key-change-in-production':
             missing.append('SECRET_KEY (cannot use default development key in production)')
         if STORAGE_DRIVER == 'cloudinary':

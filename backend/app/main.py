@@ -24,7 +24,7 @@ from .config import (
     GEMINI_API_KEY, IS_PRODUCTION, CLOUDINARY_MAX_ASSET_MB
 )
 from .db import (
-    init_db, get_db, SessionLocal, User, Session as LoginSession,
+    init_db, get_db, SessionLocal, engine, User, Session as LoginSession,
     Event, Member, Invite, Photo, Face, Job, uid, now
 )
 from .security import (
@@ -212,6 +212,7 @@ def health(db: DbSession = Depends(get_db)):
         'status': 'ok' if db_ok else 'database_error',
         'version': APP_VERSION,
         'database_connected': db_ok,
+        'database_backend': engine.dialect.name,
         'ai_models_ready': face_ai.models_available(),
         'storage_driver': store.driver,
         'gemini_ready': gemini_ai.is_gemini_available(),
