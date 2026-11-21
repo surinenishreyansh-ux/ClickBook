@@ -1,0 +1,12 @@
+services:
+  clickbook:
+    build: .
+    ports:
+      - '8000:8000'
+    environment:
+      CLICKBOOK_DATA: /data
+      STORAGE_DRIVER: local
+    volumes:
+      - clickbook_data:/data
+volumes:
+  clickbook_data:

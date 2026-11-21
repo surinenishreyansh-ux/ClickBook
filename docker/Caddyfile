@@ -1,0 +1,31 @@
+# ClickBook Production Caddy Reverse Proxy Configuration with Automatic HTTPS
+
+{$DOMAIN:localhost} {
+    # Automatic HTTPS via Let's Encrypt or ZeroSSL
+    encode zstd gzip
+
+    # Reverse proxy to FastAPI application container
+    reverse_proxy clickbook:8000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+
+        # Support streaming for Server-Sent Events (SSE) live gallery updates
+        flush_interval -1
+    }
+
+    # Security Headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+
+    # Logging
+    log {
+        output stdout
+        format console
+    }
+}

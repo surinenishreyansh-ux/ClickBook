@@ -1,0 +1,103 @@
+import os
+import sys
+import logging
+from pathlib import Path
+
+log = logging.getLogger('clickbook.config')
+
+BASE = Path(__file__).resolve().parents[1]
+DATA = Path(os.environ.get('CLICKBOOK_DATA', str(BASE / 'data')))
+DATA.mkdir(parents=True, exist_ok=True)
+
+# Database Configuration (Neon PostgreSQL or SQLite)
+DATABASE_URL = os.environ.get('DATABASE_URL', f'sqlite:///{DATA / "clickbook.sqlite3"}')
+if DATABASE_URL.startswith('postgres://'):
+    DATABASE_URL = 'postgresql+psycopg://' + DATABASE_URL[len('postgres://'):]
+elif DATABASE_URL.startswith('postgresql://') and not DATABASE_URL.startswith('postgresql+'):
+    DATABASE_URL = 'postgresql+psycopg://' + DATABASE_URL[len('postgresql://'):]
+
+# Connection pooling settings (critical for Neon serverless PostgreSQL)
+DB_POOL_SIZE = int(os.environ.get('DB_POOL_SIZE', '10'))
+DB_MAX_OVERFLOW = int(os.environ.get('DB_MAX_OVERFLOW', '20'))
+DB_POOL_TIMEOUT = int(os.environ.get('DB_POOL_TIMEOUT', '30'))
+DB_POOL_RECYCLE = int(os.environ.get('DB_POOL_RECYCLE', '300'))
+
+# Security and CORS
+SECRET_KEY = os.environ.get('SECRET_KEY', 'clickbook-insecure-dev-key-change-in-production')
+ALLOWED_ORIGINS = [
+    s.strip() for s in os.environ.get(
+        'CLICKBOOK_ORIGINS',
+        'http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000'
+    ).split(',') if s.strip()
+]
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
+if FRONTEND_URL and FRONTEND_URL not in ALLOWED_ORIGINS:
+    ALLOWED_ORIGINS.append(FRONTEND_URL)
+
+MAX_IMAGE_MB = int(os.environ.get('MAX_IMAGE_MB', '25'))
+FACE_THRESHOLD = float(os.environ.get('FACE_THRESHOLD', '0.43'))
+CLUSTER_THRESHOLD = float(os.environ.get('CLUSTER_THRESHOLD', '0.48'))
+MODEL_DIR = Path(os.environ.get('FACE_MODEL_DIR', str(BASE / 'models')))
+APP_VERSION = '1.1.0'
+
+# Storage Configuration (Cloudflare R2 or Local)
+STORAGE_DRIVER = os.environ.get('STORAGE_DRIVER', '').lower()
+R2_ACCOUNT_ID = os.environ.get('R2_ACCOUNT_ID', '').strip()
+R2_ACCESS_KEY_ID = os.environ.get('R2_ACCESS_KEY_ID', '').strip()
+R2_SECRET_ACCESS_KEY = os.environ.get('R2_SECRET_ACCESS_KEY', '').strip()
+R2_BUCKET_NAME = os.environ.get('R2_BUCKET_NAME', '').strip()
+R2_ENDPOINT_URL = os.environ.get('R2_ENDPOINT_URL', '').strip()
+R2_PUBLIC_BASE_URL = os.environ.get('R2_PUBLIC_BASE_URL', '').strip().rstrip('/')
+
+# Backward compatibility with legacy S3_* env vars
+if not STORAGE_DRIVER:
+    if R2_BUCKET_NAME or os.environ.get('S3_BUCKET'):
+        STORAGE_DRIVER = 'r2'
+    else:
+        STORAGE_DRIVER = 'local'
+
+if STORAGE_DRIVER in ('s3', 'r2'):
+    STORAGE_DRIVER = 'r2'
+    STORAGE_BUCKET = R2_BUCKET_NAME or os.environ.get('S3_BUCKET', '')
+    STORAGE_ACCESS_KEY = R2_ACCESS_KEY_ID or os.environ.get('AWS_ACCESS_KEY_ID', '')
+    STORAGE_SECRET_KEY = R2_SECRET_ACCESS_KEY or os.environ.get('AWS_SECRET_ACCESS_KEY', '')
+    if not R2_ENDPOINT_URL and R2_ACCOUNT_ID:
+        STORAGE_ENDPOINT = f'https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com'
+    else:
+        STORAGE_ENDPOINT = R2_ENDPOINT_URL or os.environ.get('S3_ENDPOINT_URL', '')
+    STORAGE_REGION = os.environ.get('S3_REGION', 'auto')
+else:
+    STORAGE_DRIVER = 'local'
+    STORAGE_BUCKET = ''
+    STORAGE_ACCESS_KEY = ''
+    STORAGE_SECRET_KEY = ''
+    STORAGE_ENDPOINT = ''
+    STORAGE_REGION = 'auto'
+
+# Google Gemini API
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
+GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash').strip()
+
+# Production configuration validation
+IS_PRODUCTION = os.environ.get('ENVIRONMENT', 'development').lower() in ('production', 'prod')
+
+def validate_production_config():
+    """Validate critical environment variables in production without leaking secrets."""
+    missing = []
+    if IS_PRODUCTION:
+        if DATABASE_URL.startswith('sqlite'):
+            log.warning('PRODUCTION WARNING: DATABASE_URL is pointing to SQLite. Neon PostgreSQL is recommended.')
+        if SECRET_KEY == 'clickbook-insecure-dev-key-change-in-production':
+            missing.append('SECRET_KEY (cannot use default development key in production)')
+        if STORAGE_DRIVER == 'r2':
+            if not STORAGE_BUCKET: missing.append('R2_BUCKET_NAME')
+            if not STORAGE_ACCESS_KEY: missing.append('R2_ACCESS_KEY_ID')
+            if not STORAGE_SECRET_KEY: missing.append('R2_SECRET_ACCESS_KEY')
+            if not STORAGE_ENDPOINT: missing.append('R2_ACCOUNT_ID or R2_ENDPOINT_URL')
+    if missing:
+        msg = f"CRITICAL: Missing required configuration variables for production: {', '.join(missing)}"
+        log.error(msg)
+        raise RuntimeError(msg)
+
+if IS_PRODUCTION:
+    validate_production_config()
