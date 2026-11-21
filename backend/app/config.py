@@ -84,6 +84,7 @@ CLOUDINARY_CLOUD_NAME = os.environ.get('CLOUDINARY_CLOUD_NAME', '').strip()
 CLOUDINARY_API_KEY = os.environ.get('CLOUDINARY_API_KEY', '').strip()
 CLOUDINARY_API_SECRET = os.environ.get('CLOUDINARY_API_SECRET', '').strip()
 CLOUDINARY_FOLDER = 'clickbook'  # Fixed prefix; all remote assets are event-scoped
+CLOUDINARY_MAX_ASSET_MB = int(os.environ.get('CLOUDINARY_MAX_ASSET_MB', '10'))
 
 # Google Gemini API
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
