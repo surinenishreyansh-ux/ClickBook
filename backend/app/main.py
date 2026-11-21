@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session as DbSession
 from PIL import Image, ImageOps, UnidentifiedImageError
 from .config import (
     ALLOWED_ORIGINS, MAX_IMAGE_MB, APP_VERSION, STORAGE_DRIVER,
-    GEMINI_API_KEY, IS_PRODUCTION
+    GEMINI_API_KEY, IS_PRODUCTION, CLOUDINARY_MAX_ASSET_MB
 )
 from .db import (
     init_db, get_db, SessionLocal, User, Session as LoginSession,
@@ -408,6 +408,21 @@ def encode_versions(raw: bytes):
         return buf.getvalue(), v.size
 
     full, (w, h) = jpeg(4000, 89)
+    if STORAGE_DRIVER == 'cloudinary':
+        # The Cloudinary Free plan accepts a maximum 10 MiB per image.
+        # Preserve quality when possible, but re-encode large DSLR images
+        # before reaching the cloud API to avoid partial uploads.
+        size_limit = CLOUDINARY_MAX_ASSET_MB * 1024 * 1024
+        if len(full) > size_limit:
+            for quality in (85, 80, 74, 68, 60):
+                full, (w, h) = jpeg(4000, quality)
+                if len(full) <= size_limit:
+                    break
+            else:
+                raise HTTPException(
+                    413,
+                    'Image remains too large for your Cloudinary plan after optimization.'
+                )
     view, _ = jpeg(1600, 85)
     thumb, _ = jpeg(650, 80)
     return full, view, thumb, w, h
