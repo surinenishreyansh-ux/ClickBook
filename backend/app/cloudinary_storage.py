@@ -19,7 +19,7 @@ from fastapi import HTTPException
 
 from .config import (
     CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET,
-    CLOUDINARY_FOLDER, MAX_IMAGE_MB,
+    CLOUDINARY_FOLDER, MAX_IMAGE_MB, CLOUDINARY_MAX_ASSET_MB,
 )
 
 log = logging.getLogger('clickbook.cloudinary')
@@ -58,6 +58,8 @@ class CloudinaryStorage:
     def put(self, key: str, data: bytes, content_type: str = 'image/jpeg') -> None:
         if content_type != 'image/jpeg':
             raise HTTPException(415, 'Cloudinary storage accepts normalized JPEG photos only')
+        if len(data) > CLOUDINARY_MAX_ASSET_MB * 1024 * 1024:
+            raise HTTPException(413, 'Image exceeds Cloudinary plan per-asset size limit')
         pid = self.public_id(key)
         try:
             result = self.uploader.upload(
