@@ -2,6 +2,7 @@ import hashlib
 import io
 import json
 import logging
+import os
 import secrets
 import threading
 import time
@@ -11,7 +12,7 @@ from datetime import timedelta
 from typing import Literal
 from fastapi import FastAPI, Depends, UploadFile, File, BackgroundTasks, HTTPException, Header, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, StreamingResponse, RedirectResponse, FileResponse
+from fastapi.responses import Response, StreamingResponse, RedirectResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select, func, delete, update, or_
@@ -55,6 +56,19 @@ app = FastAPI(
     openapi_url='/api/openapi.json',
     lifespan=lifespan
 )
+
+# Fail closed during infrastructure provisioning. Never accept real customer
+# data on an ephemeral SQLite / local-storage fallback.
+@app.middleware('http')
+async def setup_gate(request: Request, call_next):
+    if os.environ.get('CLICKBOOK_SETUP_MODE', '0').lower() in ('1', 'true', 'yes'):
+        if request.url.path != '/api/health':
+            return JSONResponse(
+                status_code=503,
+                content={'detail': 'ClickBook is being configured. Please try again later.'},
+                headers={'Cache-Control': 'no-store'}
+            )
+    return await call_next(request)
 
 app.add_middleware(
     CORSMiddleware,
@@ -196,7 +210,8 @@ def health(db: DbSession = Depends(get_db)):
         'database_connected': db_ok,
         'ai_models_ready': face_ai.models_available(),
         'storage_driver': store.driver,
-        'gemini_ready': gemini_ai.is_gemini_available()
+        'gemini_ready': gemini_ai.is_gemini_available(),
+        'setup_required': os.environ.get('CLICKBOOK_SETUP_MODE', '0').lower() in ('1', 'true', 'yes')
     }
 
 # --- Auth Routes ---
