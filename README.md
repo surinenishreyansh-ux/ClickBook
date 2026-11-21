@@ -4,33 +4,37 @@
 
 ---
 
-## Target Production Architecture ($0/Month Free Tier)
+## Target Deployment Architecture (Free-Tier Pilot; Usage Limits Apply)
 
 | Component | Technology | Free Tier Provider |
 |---|---|---|
-| **Frontend** | React 18, Vite 5, Lucide Icons, QR Canvas | Cloudflare Pages (Free unlimited bandwidth & requests) |
+| **Frontend** | React 18, Vite 5, Lucide Icons, QR Canvas | Cloudflare Pages (free tier, subject to limits) |
 | **Edge & CDN** | DNS, SSL/TLS, Caching | Cloudflare |
 | **Backend API** | Python 3.12, FastAPI, Uvicorn | Oracle Cloud Always Free (Ampere A1 ARM64, 4 OCPU, 24 GB RAM) |
 | **Reverse Proxy** | Caddy (Automatic HTTPS Let's Encrypt) / Nginx | Docker on Oracle Cloud VM |
 | **Database** | PostgreSQL 16, SQLAlchemy, Alembic Migrations | Neon Serverless PostgreSQL (Free Tier) |
-| **Photo Storage** | S3-Compatible Private Bucket, Presigned URLs | Cloudflare R2 (10 GB free, $0 egress fees) |
+| **Photo Storage** | Authenticated private photo assets via backend proxy | Cloudinary Free (monthly credit limits; no payment card required) |
 | **Face Biometrics** | YuNet Face Detection + SFace 128D Embeddings | OpenCV Zoo (Self-hosted on Oracle Cloud) |
 | **Semantic AI** | Multimodal Image Description & Moment Tagging | Google Gemini API (gemini-2.5-flash Free Tier) |
 | **Task Queue** | Persistent Database-Backed Durable Queue | Built-in PostgreSQL / SQLite queue engine |
 
 ---
 
-## What Works
+## What Works in Code
+
+> Deployment and real-world face accuracy still require verification. Cloudinary
+> has not been connected to a live account in automated tests. Never commit real
+> database URLs or API credentials (including to example environment files).
 
 - **Editorial Web UI:** High-contrast responsive design, camera capture via `getUserMedia`, multi-device upload queue.
 - **Role-Based Collaboration:** Event owners, 7-day photographer invites with optional email restrictions, photographer revocation.
 - **DSLR Auto-Uploader:** Zero-dependency Python desktop utility that monitors tethered camera folders, detects file stabilization, and uploads to ClickBook automatically.
 - **Live Guest Gallery:** Instant QR code and secret link access with Server-Sent Events (SSE) live updates and polling fallback.
-- **Dual Photo Upload Architecture:** Direct browser-to-R2 presigned upload flow to conserve server bandwidth, plus direct multipart uploads for the DSLR desktop utility.
+- **Secure Uploads:** Authorized photographers upload through FastAPI from phone cameras, desktop uploads, or the DSLR folder uploader. Cloudinary saves three normalized private JPEG variants using authenticated delivery. R2 direct-to-bucket upload remains an optional alternative when configured.
 - **OpenCV Face Matching:** Local YuNet face detection and SFace 128D embeddings. Consent-gated ephemeral selfie matching and tap-to-find face selection in event photos.
 - **Google Gemini Semantic Intelligence:** Automatically identifies broad event context, categorizes moments (ceremonies, group photos, candids, celebrations), extracts searchable tags, and generates natural captions.
 - **Persistent Job Queue:** Upload jobs survive restarts, feature automatic retries with exponential backoff, and separate heavy AI vision tasks from API request handling.
-- **Dual Database & Storage Engines:** Neon PostgreSQL + Cloudflare R2 in production; zero-configuration SQLite + local disk in development.
+- **Database & Storage Engines:** Neon PostgreSQL + Cloudinary authenticated assets for the card-free pilot, optional R2 for future scale, and SQLite + local disk for development.
 
 ---
 
@@ -86,7 +90,8 @@ python -m pytest -v
 - **[MIGRATION_REPORT.md](MIGRATION_REPORT.md):** Complete architectural audit and migration report.
 - **[DEPLOYMENT.md](DEPLOYMENT.md):** Master step-by-step production deployment guide.
 - **[DATABASE_MIGRATION.md](DATABASE_MIGRATION.md):** Neon PostgreSQL setup and Alembic migrations.
-- **[CLOUDFLARE_R2_SETUP.md](CLOUDFLARE_R2_SETUP.md):** Cloudflare R2 private bucket and presigned URL configuration.
+- **[CLOUDINARY_SETUP.md](CLOUDINARY_SETUP.md):** Recommended card-free Cloudinary private authenticated storage setup.
+- **[CLOUDFLARE_R2_SETUP.md](CLOUDFLARE_R2_SETUP.md):** Optional Cloudflare R2 private bucket and presigned URL setup.
 - **[ORACLE_CLOUD_SETUP.md](ORACLE_CLOUD_SETUP.md):** Oracle Cloud Ampere A1 ARM64 VM, Docker, firewall, and Caddy HTTPS setup.
 - **[GEMINI_SETUP.md](GEMINI_SETUP.md):** Google Gemini API setup and privacy safeguards.
 - **[ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md):** Complete environment variable reference catalog.
