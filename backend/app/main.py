@@ -14,6 +14,7 @@ from fastapi import FastAPI, Depends, UploadFile, File, BackgroundTasks, HTTPExc
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse, RedirectResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select, func, delete, update, or_
 from sqlalchemy.exc import IntegrityError
@@ -35,10 +36,11 @@ from .storage import store
 from . import face_ai
 from . import gemini_ai
 from . import queue
+from .limits import check_rate
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger('clickbook')
-Image.MAX_IMAGE_PIXELS = 80_000_000
+Image.MAX_IMAGE_PIXELS = 36_000_000
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -222,8 +224,10 @@ def health(db: DbSession = Depends(get_db)):
 # --- Auth Routes ---
 
 @app.post('/api/auth/register', status_code=201)
-def register(body: Credentials, db: DbSession = Depends(get_db)):
+def register(body: Credentials, request: Request, db: DbSession = Depends(get_db)):
     email = str(body.email).strip().lower()
+    # Restrict automated account creation; no IP address needs to be logged.
+    check_rate('auth-register-ip', request.client.host if request.client else 'unknown', limit=30, period=3600)
     if db.scalar(select(User).where(User.email == email)):
         raise HTTPException(409, 'An account with this email already exists')
     salt, pw_hash = make_password(body.password)
@@ -238,7 +242,10 @@ def register(body: Credentials, db: DbSession = Depends(get_db)):
 
 @app.post('/api/auth/login')
 def login(body: Credentials, db: DbSession = Depends(get_db)):
-    u = db.scalar(select(User).where(User.email == str(body.email).lower()))
+    email = str(body.email).strip().lower()
+    # Per-address throttling is independent of spoofable proxy headers.
+    check_rate('auth-login-email', email, limit=12, period=600)
+    u = db.scalar(select(User).where(User.email == email))
     if not u or not check_password(body.password, u.password_salt, u.password_hash):
         raise HTTPException(401, 'Incorrect email or password')
     return {'token': new_session(db, u), 'email': u.email, 'id': u.id}
@@ -266,6 +273,7 @@ def events(user: User = Depends(current_user), db: DbSession = Depends(get_db)):
 
 @app.post('/api/events', status_code=201)
 def create_event(body: EventCreate, user: User = Depends(current_user), db: DbSession = Depends(get_db)):
+    check_rate('create-event', user.id, limit=30, period=3600)
     e = Event(
         id=uid(),
         owner_id=user.id,
@@ -368,6 +376,7 @@ def remove_photographer(eid: str, member_id: str, user: User = Depends(current_u
 def invite(eid: str, body: InviteCreate, user: User = Depends(current_user), db: DbSession = Depends(get_db)):
     e = get_event(db, eid)
     must_owner(db, e, user)
+    check_rate('create-invite', user.id, limit=60, period=3600)
     raw = secrets.token_urlsafe(32)
     inv = Invite(
         id=uid(),
@@ -412,7 +421,7 @@ def encode_versions(raw: bytes):
         source.verify()
         img = Image.open(io.BytesIO(raw))
         img = ImageOps.exif_transpose(img)
-        if img.width * img.height > 80_000_000:
+        if img.width * img.height > 36_000_000:
             raise HTTPException(413, 'Image resolution too high')
         img = img.convert('RGB')
     except HTTPException:
@@ -465,7 +474,9 @@ async def upload_photo(
     must_member(db, e, user)
     if e.status != 'live':
         raise HTTPException(403, 'This event is closed to new uploads')
-
+    check_rate('upload-member', user.id, limit=180, period=60)
+    # Reject oversized uploads before decoding JPEGs. We still check actual
+    # bytes because Content-Length is not a trustworthy size guarantee.
     raw = await file.read(MAX_IMAGE_MB * 1024 * 1024 + 1)
     if len(raw) > MAX_IMAGE_MB * 1024 * 1024:
         raise HTTPException(413, f'Maximum upload size is {MAX_IMAGE_MB} MB')
@@ -477,14 +488,15 @@ async def upload_photo(
     if existing:
         return {'photo': photo_out(existing), 'duplicate': True}
 
-    full, view, thumb, w, h = encode_versions(raw)
+    # CPU-heavy image decoding/encoding must not block the live-gallery event loop.
+    full, view, thumb, w, h = await run_in_threadpool(encode_versions, raw)
     pid = uid()
     prefix = f'{eid}/{pid}'
     keys = (f'{prefix}/full.jpg', f'{prefix}/view.jpg', f'{prefix}/thumb.jpg')
 
     try:
         for key, blob in zip(keys, (full, view, thumb)):
-            store.put(key, blob)
+            await run_in_threadpool(store.put, key, blob)
 
         p = Photo(
             id=pid,
@@ -763,14 +775,14 @@ def image_response(key: str, download: bool = False, filename: str = 'photo.jpg'
                 url=url,
                 status_code=302,
                 headers={
-                    'Cache-Control': 'private, max-age=120',
+                    'Cache-Control': 'private, no-store',
                     'X-Robots-Tag': 'noindex, nofollow'
                 }
             )
     # Local fallback
     data = store.get(key)
     headers = {
-        'Cache-Control': 'private, max-age=120',
+        'Cache-Control': 'private, no-store',
         'X-Robots-Tag': 'noindex, nofollow',
         'Content-Security-Policy': "default-src 'none'"
     }
@@ -888,11 +900,11 @@ async def find_by_selfie(
     raw = await file.read(8 * 1024 * 1024 + 1)
     if len(raw) > 8 * 1024 * 1024:
         raise HTTPException(413, 'Selfie must be smaller than 8 MB')
-    _, view, _, _, _ = encode_versions(raw)
+    _, view, _, _, _ = await run_in_threadpool(encode_versions, raw)
 
     # CRITICAL: Guest selfies are strictly kept in-memory and NEVER saved to disk, DB, logs, or Gemini.
     try:
-        detected = face_ai.extract_faces(view)
+        detected = await run_in_threadpool(face_ai.extract_faces, view)
     except RuntimeError:
         raise HTTPException(503, 'Face AI models are not installed on this server')
 
@@ -1022,8 +1034,13 @@ if SITE_DIR.is_dir() and (SITE_DIR / 'index.html').is_file():
             raise HTTPException(404, 'API endpoint not found')
         # Do not serve arbitrary filesystem paths; only SPA fallback and static assets
         if path and '.' in Path(path).name:
-            asset_path = SITE_DIR / path
-            if asset_path.is_file():
+            # Only known root-level public files; the /assets mount handles
+            # compiled assets. Never let a URL escape the frontend build dir.
+            allowed_public = {'favicon.ico', 'favicon.svg', 'robots.txt', 'manifest.webmanifest'}
+            if path not in allowed_public:
+                raise HTTPException(404, 'Static asset not found')
+            asset_path = (SITE_DIR / path).resolve()
+            if asset_path.is_relative_to(SITE_DIR.resolve()) and asset_path.is_file():
                 return FileResponse(asset_path)
             raise HTTPException(404, 'Static asset not found')
         return FileResponse(
