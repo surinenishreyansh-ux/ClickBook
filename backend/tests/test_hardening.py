@@ -64,3 +64,51 @@ def test_sse_uses_same_snapshot_within_short_window():
     assert first is second  # No second database query needed within TTL.
     assert first['count'] == 0
     assert first['processed'] == 0
+
+
+def test_registration_can_be_paused_during_event(monkeypatch):
+    client = TestClient(main.app)
+    monkeypatch.setenv('ALLOW_PUBLIC_REGISTRATION', '0')
+    r = client.post('/api/auth/register', json={
+        'email': 'not-allowed-during-event@example.com',
+        'password': 'a-unique-strong-password'
+    })
+    assert r.status_code == 403
+    assert client.get('/api/health').status_code == 200
+
+
+def test_event_and_photo_quotas(monkeypatch):
+    import io
+    from PIL import Image
+
+    client = TestClient(main.app)
+    response = client.post('/api/auth/register', json={
+        'email': 'pilot-event-quotas@example.com',
+        'password': 'a-long-pilot-password'
+    })
+    assert response.status_code == 201, response.text
+    token = response.json()['token']
+    auth = {'Authorization': 'Bearer ' + token}
+
+    monkeypatch.setattr(main, 'MAX_OWNER_EVENTS', 1)
+    e = client.post('/api/events', json={'title': 'Limited Event'}, headers=auth)
+    assert e.status_code == 201
+    assert client.post('/api/events', json={'title': 'Second Event'}, headers=auth).status_code == 409
+
+    monkeypatch.setattr(main, 'MAX_EVENT_PHOTOS', 1)
+    photo = Image.new('RGB', (240, 120), (100, 40, 20))
+    buff = io.BytesIO()
+    photo.save(buff, 'JPEG', quality=90)
+    data = buff.getvalue()
+    uploaded = client.post('/api/events/' + e.json()['id'] + '/photos',
+                           headers=auth,
+                           files={'file': ('first.jpg', data, 'image/jpeg')})
+    assert uploaded.status_code == 201, uploaded.text
+    second = Image.new('RGB', (240, 120), (100, 60, 20))
+    buff = io.BytesIO()
+    second.save(buff, 'JPEG', quality=90)
+    rejected = client.post('/api/events/' + e.json()['id'] + '/photos',
+                           headers=auth,
+                           files={'file': ('second.jpg', buff.getvalue(), 'image/jpeg')})
+    assert rejected.status_code == 409
+    assert client.get('/api/events/' + e.json()['id'] + '/photos', headers=auth).json()['total'] == 1
