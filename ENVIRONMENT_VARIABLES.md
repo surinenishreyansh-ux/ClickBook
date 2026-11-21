@@ -15,7 +15,10 @@ All runtime configuration for ClickBook is governed through environment variable
 | `DB_MAX_OVERFLOW` | No | `20` | Max overflow burst connections for Neon PostgreSQL. |
 | `DB_POOL_TIMEOUT` | No | `30` | Seconds to wait for a database connection before timing out. |
 | `DB_POOL_RECYCLE` | No | `300` | Connection recycling frequency in seconds (prevents stale sockets during Neon auto-suspend). |
-| `STORAGE_DRIVER` | Yes | `local` | `r2` for Cloudflare R2 object storage, or `local` for disk storage. |
+| `STORAGE_DRIVER` | Yes | `local` | `cloudinary` for private Cloudinary assets, `r2` for R2, or `local` for development. |
+| `CLOUDINARY_CLOUD_NAME` | When `cloudinary` | None | Cloudinary cloud name; backend only. |
+| `CLOUDINARY_API_KEY` | When `cloudinary` | None | Cloudinary API key; backend only. |
+| `CLOUDINARY_API_SECRET` | When `cloudinary` | None | Sensitive Cloudinary API secret. Never commit or expose to frontend. |
 | `R2_ACCOUNT_ID` | When `r2` | None | Your 32-character Cloudflare Account ID from the Cloudflare dashboard. |
 | `R2_ACCESS_KEY_ID` | When `r2` | None | Cloudflare R2 S3 API Access Key ID. |
 | `R2_SECRET_ACCESS_KEY` | When `r2` | None | Cloudflare R2 S3 API Secret Access Key. |
