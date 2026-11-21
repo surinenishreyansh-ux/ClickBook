@@ -1,9 +1,9 @@
 # ClickBook — Production Deployment Master Guide
 
-This guide takes you step-by-step through deploying the complete ClickBook production architecture for **$0/month within available free-tier limits**:
+This guide takes you step-by-step through deploying the complete ClickBook production architecture for a **low-cost pilot within free-tier limits** (availability and usage not guaranteed):
 
 - **Frontend:** React + Vite on **Cloudflare Pages** (Free)
-- **Photo Storage:** **Cloudflare R2** (10 GB free, $0 egress fees)
+- **Photo Storage:** **Cloudinary authenticated assets** (Free plan, usage-based credits; no payment card needed)
 - **Database:** **Neon Serverless PostgreSQL** (Free Tier)
 - **Backend Compute:** **Oracle Cloud Infrastructure (OCI) Always Free** Ampere A1 ARM64 (Free)
 - **Semantic Vision:** **Google Gemini API** (Free Tier)
@@ -28,9 +28,9 @@ This guide takes you step-by-step through deploying the complete ClickBook produ
         │                                                │
         ├──────────────────────┬─────────────────────────┤
         ▼                      ▼                         ▼
- [ Cloudflare R2 ]     [ Neon PostgreSQL ]      [ Google Gemini API ]
-  Private Photos         Serverless DB           Semantic Metadata
-  Presigned URLs         Alembic Migrations      Tags & Moment Types
+ [ Cloudinary ]       [ Neon PostgreSQL ]      [ Google Gemini API ]
+  Authenticated Photos    Serverless DB           Semantic Metadata
+  Backend-Gated Images    Alembic Migrations      Tags & Moment Types
 ```
 
 ---
@@ -47,13 +47,21 @@ This guide takes you step-by-step through deploying the complete ClickBook produ
 
 ---
 
-## Step 2: Set Up Cloudflare R2 Photo Storage
+## Step 2: Set Up Cloudinary Photo Storage
 
-1. Go to the [Cloudflare Dashboard](https://dash.cloudflare.com/) > **R2 Storage**.
-2. Click **Create bucket**, name it `clickbook-photos-prod`, and keep it **Private**.
-3. Under **Manage R2 API Tokens**, create a token with `Object Read & Write` permissions.
-4. Save the **Account ID**, **Access Key ID**, and **Secret Access Key**.
-5. In your bucket settings, add the CORS policy from `CLOUDFLARE_R2_SETUP.md`.
+1. Create a Cloudinary Free account at https://cloudinary.com/users/register_free
+   (no card required). Follow **[CLOUDINARY_SETUP.md](CLOUDINARY_SETUP.md)**.
+2. In the Cloudinary Console, copy your cloud name, API key, and API secret
+   into a private server-side `.env` file.
+3. Set `STORAGE_DRIVER=cloudinary`, and add
+   `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and
+   `CLOUDINARY_API_SECRET`.
+4. Do **not** publish the API secret to frontend JavaScript or Git.
+5. Photos are uploaded as Cloudinary `authenticated` assets and returned
+   through ClickBook's protected image endpoints. The backend serves media
+   bytes and may require more bandwidth than direct R2 delivery.
+
+R2 remains available as an optional alternative if you activate it later.
 
 ---
 
@@ -93,7 +101,7 @@ This guide takes you step-by-step through deploying the complete ClickBook produ
    cp .env.example .env
    nano .env
    ```
-   Set your Neon `DATABASE_URL`, R2 keys, `SECRET_KEY`, and `DOMAIN=api.yourdomain.com`.
+   Set your Neon `DATABASE_URL`, Cloudinary credentials, `STORAGE_DRIVER=cloudinary`, `SECRET_KEY`, and `DOMAIN=api.yourdomain.com`.
 7. Start the application:
    ```bash
    docker compose -f docker-compose.prod.yml up -d --build

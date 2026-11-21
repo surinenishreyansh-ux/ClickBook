@@ -2,10 +2,14 @@ import os
 import sys
 import logging
 from pathlib import Path
+from dotenv import load_dotenv
 
 log = logging.getLogger('clickbook.config')
 
 BASE = Path(__file__).resolve().parents[1]
+# Uvicorn and Alembic do not load .env by default. Explicit process env wins.
+load_dotenv(BASE.parent / '.env', override=False)
+load_dotenv(BASE / '.env', override=False)
 DATA = Path(os.environ.get('CLICKBOOK_DATA', str(BASE / 'data')))
 DATA.mkdir(parents=True, exist_ok=True)
 
@@ -40,7 +44,7 @@ CLUSTER_THRESHOLD = float(os.environ.get('CLUSTER_THRESHOLD', '0.48'))
 MODEL_DIR = Path(os.environ.get('FACE_MODEL_DIR', str(BASE / 'models')))
 APP_VERSION = '1.1.0'
 
-# Storage Configuration (Cloudflare R2 or Local)
+# Storage Configuration (Cloudinary, Cloudflare R2, or Local)
 STORAGE_DRIVER = os.environ.get('STORAGE_DRIVER', '').lower()
 R2_ACCOUNT_ID = os.environ.get('R2_ACCOUNT_ID', '').strip()
 R2_ACCESS_KEY_ID = os.environ.get('R2_ACCESS_KEY_ID', '').strip()
@@ -67,12 +71,20 @@ if STORAGE_DRIVER in ('s3', 'r2'):
         STORAGE_ENDPOINT = R2_ENDPOINT_URL or os.environ.get('S3_ENDPOINT_URL', '')
     STORAGE_REGION = os.environ.get('S3_REGION', 'auto')
 else:
-    STORAGE_DRIVER = 'local'
+    if STORAGE_DRIVER not in ('local', 'cloudinary'):
+        raise RuntimeError('Unsupported STORAGE_DRIVER; choose local, r2, or cloudinary')
     STORAGE_BUCKET = ''
     STORAGE_ACCESS_KEY = ''
     STORAGE_SECRET_KEY = ''
     STORAGE_ENDPOINT = ''
     STORAGE_REGION = 'auto'
+
+# Cloudinary authenticated private image storage (card-free starter option)
+CLOUDINARY_CLOUD_NAME = os.environ.get('CLOUDINARY_CLOUD_NAME', '').strip()
+CLOUDINARY_API_KEY = os.environ.get('CLOUDINARY_API_KEY', '').strip()
+CLOUDINARY_API_SECRET = os.environ.get('CLOUDINARY_API_SECRET', '').strip()
+CLOUDINARY_FOLDER = 'clickbook'  # Fixed prefix; all remote assets are event-scoped
+CLOUDINARY_MAX_ASSET_MB = int(os.environ.get('CLOUDINARY_MAX_ASSET_MB', '10'))
 
 # Google Gemini API
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
@@ -89,6 +101,10 @@ def validate_production_config():
             log.warning('PRODUCTION WARNING: DATABASE_URL is pointing to SQLite. Neon PostgreSQL is recommended.')
         if SECRET_KEY == 'clickbook-insecure-dev-key-change-in-production':
             missing.append('SECRET_KEY (cannot use default development key in production)')
+        if STORAGE_DRIVER == 'cloudinary':
+            if not CLOUDINARY_CLOUD_NAME: missing.append('CLOUDINARY_CLOUD_NAME')
+            if not CLOUDINARY_API_KEY: missing.append('CLOUDINARY_API_KEY')
+            if not CLOUDINARY_API_SECRET: missing.append('CLOUDINARY_API_SECRET')
         if STORAGE_DRIVER == 'r2':
             if not STORAGE_BUCKET: missing.append('R2_BUCKET_NAME')
             if not STORAGE_ACCESS_KEY: missing.append('R2_ACCESS_KEY_ID')

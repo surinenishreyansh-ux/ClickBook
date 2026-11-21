@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session as DbSession
 from PIL import Image, ImageOps, UnidentifiedImageError
 from .config import (
     ALLOWED_ORIGINS, MAX_IMAGE_MB, APP_VERSION, STORAGE_DRIVER,
-    GEMINI_API_KEY, IS_PRODUCTION
+    GEMINI_API_KEY, IS_PRODUCTION, CLOUDINARY_MAX_ASSET_MB
 )
 from .db import (
     init_db, get_db, SessionLocal, User, Session as LoginSession,
@@ -298,6 +298,8 @@ def delete_event(eid: str, user: User = Depends(current_user), db: DbSession = D
     must_owner(db, e, user)
     all_photos = db.scalars(select(Photo).where(Photo.event_id == eid)).all()
     keys = [k for p in all_photos for k in (p.image_key, p.view_key, p.thumb_key)]
+    # Keep database records if cloud deletion fails, so deletion can be retried.
+    store.delete_many(keys)
     db.execute(delete(Face).where(Face.event_id == eid))
     db.execute(delete(Job).where(Job.event_id == eid))
     db.execute(delete(Photo).where(Photo.event_id == eid))
@@ -305,7 +307,6 @@ def delete_event(eid: str, user: User = Depends(current_user), db: DbSession = D
     db.execute(delete(Invite).where(Invite.event_id == eid))
     db.delete(e)
     db.commit()
-    store.delete_many(keys)
     return {'ok': True, 'deleted_photos': len(all_photos)}
 
 @app.post('/api/events/{eid}/rotate-qr')
@@ -407,6 +408,21 @@ def encode_versions(raw: bytes):
         return buf.getvalue(), v.size
 
     full, (w, h) = jpeg(4000, 89)
+    if STORAGE_DRIVER == 'cloudinary':
+        # The Cloudinary Free plan accepts a maximum 10 MiB per image.
+        # Preserve quality when possible, but re-encode large DSLR images
+        # before reaching the cloud API to avoid partial uploads.
+        size_limit = CLOUDINARY_MAX_ASSET_MB * 1024 * 1024
+        if len(full) > size_limit:
+            for quality in (85, 80, 74, 68, 60):
+                full, (w, h) = jpeg(4000, quality)
+                if len(full) <= size_limit:
+                    break
+            else:
+                raise HTTPException(
+                    413,
+                    'Image remains too large for your Cloudinary plan after optimization.'
+                )
     view, _ = jpeg(1600, 85)
     thumb, _ = jpeg(650, 80)
     return full, view, thumb, w, h
@@ -549,6 +565,11 @@ def confirm_presigned_upload(
     view_key = f'{prefix}/view.jpg'
     thumb_key = f'{prefix}/thumb.jpg'
 
+    # Only Cloudflare R2 supports direct presigned upload confirmation.
+    # Cloudinary and local storage use the authenticated multipart endpoint.
+    if not store.is_r2():
+        raise HTTPException(409, 'Direct-to-storage confirmation requires Cloudflare R2')
+
     # Verify presence in storage
     head_full = store.head(full_key)
     head_view = store.head(view_key)
@@ -645,11 +666,11 @@ def delete_photo(eid: str, pid: str, user: User = Depends(current_user), db: DbS
     if not p or p.event_id != eid:
         raise HTTPException(404, 'Photo not found')
     keys = (p.image_key, p.view_key, p.thumb_key)
+    store.delete_many(list(keys))
     db.execute(delete(Face).where(Face.photo_id == pid))
     db.execute(delete(Job).where(Job.photo_id == pid))
     db.delete(p)
     db.commit()
-    store.delete_many(list(keys))
     return {'ok': True}
 
 @app.get('/api/events/{eid}/clusters')

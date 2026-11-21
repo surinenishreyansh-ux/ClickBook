@@ -17,8 +17,13 @@ class Storage:
         self.client = None
         self.driver = STORAGE_DRIVER
         self.bucket = STORAGE_BUCKET
+        self.cloudinary = None
 
-        if self.driver == 'r2':
+        if self.driver == 'cloudinary':
+            from .cloudinary_storage import CloudinaryStorage
+            self.cloudinary = CloudinaryStorage()
+            log.info('Initialized Cloudinary authenticated private photo storage')
+        elif self.driver == 'r2':
             import boto3
             from botocore.config import Config
             if not self.bucket:
@@ -41,7 +46,7 @@ class Storage:
             )
             log.info('Initialized Cloudflare R2 storage client (bucket: %s)', self.bucket)
         elif self.driver != 'local':
-            raise RuntimeError(f'Unsupported STORAGE_DRIVER: {self.driver}. Must be local or r2.')
+            raise RuntimeError(f'Unsupported STORAGE_DRIVER: {self.driver}. Must be local, r2 or cloudinary.')
         else:
             log.info('Using local disk storage adapter (path: %s)', self.root)
 
@@ -49,7 +54,9 @@ class Storage:
         return self.client is not None and self.driver == 'r2'
 
     def put(self, key: str, data: bytes, content_type: str = 'image/jpeg'):
-        """Store bytes either in R2 or local directory."""
+        """Store normalized image bytes in the configured storage backend."""
+        if self.cloudinary:
+            return self.cloudinary.put(key, data, content_type)
         if self.client:
             try:
                 self.client.put_object(
@@ -68,7 +75,9 @@ class Storage:
             path.write_bytes(data)
 
     def get(self, key: str) -> bytes:
-        """Fetch bytes from R2 or local directory."""
+        """Fetch private image bytes from the selected backend."""
+        if self.cloudinary:
+            return self.cloudinary.get(key)
         if self.client:
             try:
                 resp = self.client.get_object(Bucket=self.bucket, Key=key)
@@ -85,7 +94,9 @@ class Storage:
         return p.read_bytes()
 
     def head(self, key: str) -> dict:
-        """Verify object existence and return metadata (size, content_type)."""
+        """Check whether an object exists."""
+        if self.cloudinary:
+            return self.cloudinary.head(key)
         if self.client:
             try:
                 resp = self.client.head_object(Bucket=self.bucket, Key=key)
@@ -106,7 +117,9 @@ class Storage:
         return {'exists': False, 'size': 0, 'content_type': ''}
 
     def delete(self, key: str):
-        """Delete an object from R2 or local directory."""
+        """Delete an object."""
+        if self.cloudinary:
+            return self.cloudinary.delete(key)
         if self.client:
             try:
                 self.client.delete_object(Bucket=self.bucket, Key=key)
@@ -119,6 +132,8 @@ class Storage:
         """Bulk delete objects."""
         if not keys:
             return
+        if self.cloudinary:
+            return self.cloudinary.delete_many(keys)
         if self.client:
             try:
                 objects = [{'Key': k} for k in keys]
@@ -132,15 +147,7 @@ class Storage:
     def generate_presigned_upload_url(self, key: str, content_type: str = 'image/jpeg', expires_in: int = 900) -> dict:
         """Generate a secure presigned PUT URL for direct browser-to-R2 upload."""
         if not self.client:
-            # When running locally without R2, return a local endpoint indicator
-            return {
-                'mode': 'local',
-                'key': key,
-                'upload_url': f'/api/storage/local-upload/{key}',
-                'method': 'PUT',
-                'headers': {'Content-Type': content_type},
-                'expires_in': expires_in
-            }
+            raise HTTPException(409, 'Presigned uploads require R2. Use the authenticated multipart upload API.')
         try:
             url = self.client.generate_presigned_url(
                 ClientMethod='put_object',

@@ -4,11 +4,28 @@ Review this checklist before publishing your ClickBook installation to productio
 
 ---
 
-### 1. Storage & Cloudflare R2
-- [x] **Private Buckets:** Verify that your Cloudflare R2 bucket does NOT have public bucket access enabled.
-- [x] **Time-Limited URLs:** Confirm that presigned download and upload URLs expire after 15 minutes (900 seconds).
-- [x] **Credential Isolation:** R2 API tokens are passed via server-side environment variables and never exposed to the frontend browser bundle.
-- [x] **Upload Validation:** Uploaded files are verified for size (max 25 MB), EXIF-stripped, and re-encoded into JPEGs before permanent storage.
+### 1. Storage & Cloudinary (pilot default)
+- [x] **Authenticated originals and variants:** The Cloudinary adapter uploads all
+  three JPEG versions with delivery `type=authenticated`, never public URLs.
+- [x] **Backend-mediated delivery:** Event QR access is checked by ClickBook
+  before fetching signed photos on the server. Client browsers do not receive
+  Cloudinary download URLs.
+- [x] **Authenticated uploads:** Phone/DSLR uploads require an approved
+  photographer account. Unauthenticated local PUT paths are removed.
+- [x] **Image normalization:** Source images are EXIF-stripped and encoded
+  into three JPEG sizes before upload.
+- [ ] **Live Cloudinary check:** Confirm real assets are marked
+  `authenticated`, do not load without authorization, and deletion succeeds.
+- [ ] **Quota / load test:** Measure Cloudinary credits, VM egress/bandwidth,
+  and guest image latency under realistic multi-guest load.
+- [ ] **Credential hygiene:** Review Git history for inadvertently committed
+  credentials; rotate any exposed database password. Do not commit `.env`.
+- [ ] **Account resilience:** Test provider outages and confirm storage
+  deletion errors are reported and retried.
+
+Cloudflare R2 remains an optional alternative and is not enabled by default.
+Cloudinary's Free plan has limited credits and does not guarantee production
+scale. See [CLOUDINARY_SETUP.md](CLOUDINARY_SETUP.md).
 
 ---
 
