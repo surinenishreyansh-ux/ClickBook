@@ -24,6 +24,7 @@ STORAGE_DRIVER=cloudinary
 CLOUDINARY_CLOUD_NAME=your_cloud_name
 CLOUDINARY_API_KEY=your_api_key
 CLOUDINARY_API_SECRET=your_api_secret
+CLOUDINARY_MAX_ASSET_MB=10
 ```
 
 You do **not** need Cloudflare R2 credentials when this driver is selected.
@@ -45,7 +46,7 @@ using `docker compose -f docker-compose.prod.yml up -d --build`.
 
 - **Only logged-in authorized photographers** can upload via
   `POST /api/events/{eid}/photos`, including phone camera and DSLR uploader.
-- The backend validates the image, removes EXIF, generates original/view/thumb
+- The backend validates the image, removes EXIF, adapts large originals to the Free plan's 10 MiB per-image limit, and generates full/view/thumb
   JPEG versions, and uploads each with Cloudinary delivery
   `type=authenticated` to an event-specific folder.
 - The guest website continues to use ClickBook's QR gallery and
