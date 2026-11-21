@@ -39,6 +39,8 @@ if FRONTEND_URL and FRONTEND_URL not in ALLOWED_ORIGINS:
     ALLOWED_ORIGINS.append(FRONTEND_URL)
 
 MAX_IMAGE_MB = int(os.environ.get('MAX_IMAGE_MB', '25'))
+MAX_EVENT_PHOTOS = max(1, int(os.environ.get('MAX_EVENT_PHOTOS', '2000')))
+MAX_OWNER_EVENTS = max(1, int(os.environ.get('MAX_OWNER_EVENTS', '10')))
 FACE_THRESHOLD = float(os.environ.get('FACE_THRESHOLD', '0.43'))
 CLUSTER_THRESHOLD = float(os.environ.get('CLUSTER_THRESHOLD', '0.48'))
 MODEL_DIR = Path(os.environ.get('FACE_MODEL_DIR', str(BASE / 'models')))
