@@ -115,5 +115,10 @@ def validate_production_config():
         log.error(msg)
         raise RuntimeError(msg)
 
-if IS_PRODUCTION:
+# The only allowed incomplete-production state is the maintenance-only bootstrap:
+# HTTP middleware blocks all public routes except health until secrets are set.
+SETUP_MODE = os.environ.get('CLICKBOOK_SETUP_MODE', '0').lower() in ('1', 'true', 'yes')
+if IS_PRODUCTION and not SETUP_MODE:
     validate_production_config()
+elif IS_PRODUCTION and SETUP_MODE:
+    log.warning('ClickBook in setup mode: application traffic disabled until secrets are configured')
