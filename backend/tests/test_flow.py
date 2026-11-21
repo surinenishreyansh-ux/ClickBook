@@ -230,6 +230,10 @@ def test_presigned_upload_endpoints(monkeypatch):
     event = create_event(token, 'Direct Upload Event')
     eid = event['id']
 
+    # R2 is required for direct-to-storage upload. Local uploads must use
+    # the authenticated multipart API; an anonymous local PUT is never allowed.
+    assert client.put('/api/storage/local-upload/arbitrary/path', content=jpeg()).status_code == 404
+
     # Request presigned upload
     req_payload = {
         'filename': 'dslr_shot.jpg',
@@ -237,6 +241,11 @@ def test_presigned_upload_endpoints(monkeypatch):
         'file_size': 1024 * 100,
         'sha256': 'a' * 64
     }
+    assert client.post(f'/api/events/{eid}/photos/request-upload', headers=headers(token), json=req_payload).status_code == 409
+
+    from app.storage import store
+    monkeypatch.setattr(store, 'is_r2', lambda: True)
+    monkeypatch.setattr(store, 'generate_presigned_upload_url', lambda key, content_type='image/jpeg', expires_in=900: {'mode': 'r2', 'key': key, 'upload_url': 'https://example.invalid/temporary-upload'})
     r = client.post(f'/api/events/{eid}/photos/request-upload', headers=headers(token), json=req_payload)
     assert r.status_code == 200, r.text
     data = r.json()

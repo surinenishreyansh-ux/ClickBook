@@ -502,6 +502,11 @@ def request_presigned_upload(
     if body.file_size > MAX_IMAGE_MB * 1024 * 1024:
         raise HTTPException(413, f'Maximum file size is {MAX_IMAGE_MB} MB')
 
+    # Local development uses the authenticated multipart endpoint.
+    # Do not mint unauthenticated local PUT URLs that bypass photographer roles.
+    if not store.is_r2():
+        raise HTTPException(409, 'Direct-to-storage upload requires Cloudflare R2; use the authenticated photo upload endpoint locally')
+
     # Deduplication check
     existing = db.scalar(select(Photo).where(Photo.event_id == eid, Photo.sha256 == body.sha256))
     if existing:
@@ -585,14 +590,8 @@ def confirm_presigned_upload(
 
     return {'photo': photo_out(p), 'duplicate': False}
 
-# Helper endpoint for direct PUT upload when developing locally without R2
-@app.put('/api/storage/local-upload/{path:path}', include_in_schema=False)
-async def local_storage_put(path: str, request: Request):
-    if store.is_r2():
-        raise HTTPException(400, 'Local upload endpoint disabled when R2 is active')
-    body = await request.body()
-    store.put(path, body)
-    return {'ok': True, 'bytes': len(body)}
+# Local development uploads use POST /api/events/{eid}/photos, which
+# checks authenticated event membership and validates/normalizes image bytes.
 
 # --- Photo Query & Reprocess ---
 
