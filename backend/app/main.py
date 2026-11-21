@@ -62,6 +62,10 @@ app = FastAPI(
 @app.middleware('http')
 async def setup_gate(request: Request, call_next):
     if os.environ.get('CLICKBOOK_SETUP_MODE', '0').lower() in ('1', 'true', 'yes'):
+        # Render's default startup health probe sends HEAD /.
+        # Keep it healthy while all user-facing routes remain disabled.
+        if request.method == 'HEAD' and request.url.path == '/':
+            return Response(status_code=200, headers={'Cache-Control': 'no-store'})
         if request.url.path != '/api/health':
             return JSONResponse(
                 status_code=503,
